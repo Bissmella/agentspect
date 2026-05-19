@@ -3,7 +3,8 @@
         "deny": [
             "Bash(git commit)",
             "Bash(git push)",
-            "Bash(git reset)"
+            "Bash(git reset)",
+            "Read(./secrets/**)"
         ]
     }
 }

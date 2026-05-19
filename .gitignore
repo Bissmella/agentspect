@@ -11,6 +11,7 @@ venv/
 .env
 .uv/
 uv.lock
+secrets/
 
 # IDE
 .vscode/
