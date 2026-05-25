@@ -1,3 +1,4 @@
+from backend.agents.orchestrator import OrchestratorAgent, build_graph, run_suite
 from backend.agents.reporter import ReporterAgent, reporter_node
 from backend.agents.scenario_generator import ScenarioGeneratorAgent, scenario_generator_node
 from backend.agents.scorer import ScorerAgent, scorer_node
@@ -7,6 +8,9 @@ from backend.agents.world_state_patcher import WorldStatePatcherAgent, world_sta
 
 __all__ = [
     "ATAGraphState",
+    "OrchestratorAgent",
+    "build_graph",
+    "run_suite",
     "ScenarioGeneratorAgent",
     "scenario_generator_node",
     "UserSimulatorAgent",

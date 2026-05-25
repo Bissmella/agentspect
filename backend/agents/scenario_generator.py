@@ -90,6 +90,7 @@ def _build_system_prompt(state: ATAGraphState) -> str:
     world_state = state["world_state_input"]
     test_config = state["test_config"]
 
+#TODO to be enhanced
     return f"""You are a scenario generator for an agent testing framework.
 
 ## Agent Under Test

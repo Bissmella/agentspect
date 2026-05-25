@@ -168,7 +168,7 @@ Each agent is a LangGraph node: takes `ATAGraphState`, returns partial dict upda
 
 ## Phase 4: LangGraph Orchestration (Days 11-13)
 
-**Goal:** Wire all nodes into a StateGraph. Full pipeline works in-process.
+**Goal:** Wire all nodes into a StateGraph. Full pipeline works in-process using langgraph and langchain.
 
 ### Files
 
