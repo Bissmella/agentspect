@@ -182,6 +182,67 @@ class OpenAIClient(LLMClient):
         raise ValueError("LLM did not return structured output via tool call")
 
 
+class OpenAICompatibleClient(LLMClient):
+    """ covers OpenRouter, Ollama, Azure OpenAI, and any OpenAI-compatible endpoint."""
+
+    def __init__(self, model: str, base_url: str, api_key: str = ""):
+        import openai
+        self.model = model
+        self.client = openai.AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key or "ollama"
+        )
+
+    async def chat(self, messages, tools=None, temperature=0.7, max_tokens=4096) -> LLMResponse:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+
+        if tools:
+            kwargs["tools"] = [
+                {"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t["parameters"]}}
+                for t in tools
+            ]
+
+        response = await self.client.chat.completions.create(**kwargs)
+
+        message = response.choices[0].message
+        content = message.content or ""
+        tool_calls = None
+
+        if message.tool_calls:
+            import json
+
+            tool_calls = [
+                {"name": tc.function.name, "arguments": json.loads(tc.function.arguments), "id": tc.id}
+                for tc in message.tool_calls
+            ]
+
+        usage = None
+        if response.usage:
+            usage = {"input_tokens": response.usage.prompt_tokens, "output_tokens": response.usage.completion_tokens}
+
+        return LLMResponse(content=content, tool_calls=tool_calls, usage=usage)
+    
+    async def chat_with_structured_output(self, messages, output_schema, temperature=0.0) -> BaseModel:
+        schema = output_schema.model_json_schema()
+        tool = {
+            "name": "structured_output",
+            "description": f"Return output conforming to {output_schema.__name__}",
+            "parameters": schema,
+        }
+
+        response = await self.chat(messages, tools=[tool], temperature=temperature)
+
+        if response.tool_calls:
+            return output_schema.model_validate(response.tool_calls[0]["arguments"])
+
+        raise ValueError("LLM did not return structured output via tool call")
+
+
 class GoogleClient(LLMClient):
     def __init__(self, model: str, api_key: str | None = None):
         import google.generativeai as genai
@@ -301,13 +362,22 @@ class GoogleClient(LLMClient):
 
 
 def create_llm_client(provider: str, model: str, api_key: str | None = None) -> LLMClient:
-    providers = {
-        "anthropic": AnthropicClient,
-        "openai": OpenAIClient,
-        "google": GoogleClient,
-    }
-
-    if provider not in providers:
-        raise ValueError(f"Unknown LLM provider: {provider}. Must be one of: {list(providers.keys())}")
-
-    return providers[provider](model=model, api_key=api_key)
+    if provider == "anthropic":
+        return AnthropicClient(model, api_key or settings.anthropic_api_key)
+    if provider == "openai":
+        return OpenAIClient(model, api_key or settings.openai_api_key)
+    if provider == "google":
+        return GoogleClient(model, api_key or settings.google_api_key)
+    if provider == "openrouter":
+        return OpenAICompatibleClient(
+            model=model,
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key or settings.openrouter_api_key,
+        )
+    if provider == "ollama":
+        return OpenAICompatibleClient(
+            model=model,
+            base_url=settings.ollama_base_url,
+            api_key="ollama",   # Ollama does not check the key
+        )
+    raise ValueError(f"Unknown LLM provider: {provider}. Must be one of: anthropic, openai, google, openrouter, ollama")
