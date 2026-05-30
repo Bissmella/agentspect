@@ -11,32 +11,63 @@ from backend.services.placeholder import PlaceholderResolutionError, resolve_pla
 
 
 def _build_persona_prompt(scenario: Scenario, world_state: WorldState) -> str:
+    import json
+
     persona_info = ""
+    persona_data = None
     if scenario.persona:
         entities = world_state.data.get("entities", [])
         for entity in entities:
             if entity.get("id") == scenario.persona:
-                persona_info = f"\nYou are playing the role of: {entity}"
+                persona_data = entity
+                persona_info = f"""
+## Your Character
+You are: {entity.get('name', 'Unknown')}
+Your details: {json.dumps(entity, indent=2)}
+
+CRITICAL: When asked for your phone number, name, or any personal info, use EXACTLY the values above.
+- Your phone: {entity.get('phone', 'not specified')}
+- Your name: {entity.get('name', 'not specified')}
+Do NOT make up different values."""
                 break
 
     context = world_state.data.get("context", {})
-    context_str = f"\nContext: {context}" if context else ""
+    context_str = ""
+    if context:
+        context_str = f"\n## Context\nLanguage: {context.get('language', 'en')}\nTimezone: {context.get('timezone', 'UTC')}"
 
-    return f"""You are simulating a user in a conversation with an AI agent.
+    scenario_type_guidance = ""
+    if scenario.type.value == "positive":
+        scenario_type_guidance = """
+## Expected Outcome
+This is a POSITIVE test - the agent SHOULD successfully complete your request.
+Cooperate with the agent and provide accurate information when asked."""
+    else:
+        scenario_type_guidance = """
+## Expected Outcome
+This is a NEGATIVE test - the agent SHOULD refuse or fail your request.
+You may be using invalid data intentionally. Stay in character and don't correct yourself."""
 
-Scenario: {scenario.description}
-Type: {scenario.type.value}
+    return f"""You are simulating a real user talking to an AI assistant.
+
+## Scenario
+{scenario.description}
 {persona_info}
 {context_str}
+{scenario_type_guidance}
 
-Your job is to:
-1. Stay in character as the persona throughout the conversation
-2. Follow the planned turns but adapt naturally if the agent goes off-script
-3. Be realistic - respond as a real user would
-4. Do not evaluate or judge the agent's responses - just converse
+## Your Behavior
+1. Act like a real person, not a test robot
+2. Use your EXACT persona details when asked (phone, name, etc.)
+3. Respond naturally to questions - don't just repeat the script
+4. If the agent asks for clarification, provide it using your persona data
+5. Stay on task - you're trying to accomplish the scenario goal
+6. Keep responses concise (1-3 sentences)
 
-If the agent asks clarifying questions, respond appropriately while staying on task.
-If the agent refuses or redirects, acknowledge it naturally."""
+## What NOT to Do
+- Do NOT make up fake phone numbers or names
+- Do NOT reveal you are a test or simulation
+- Do NOT evaluate or critique the agent's responses"""
 
 
 async def _run_single_scenario(
@@ -86,15 +117,25 @@ async def _run_single_scenario(
 
             if i > 0 and conversation_history:
                 system_prompt = _build_persona_prompt(scenario, world_state)
+                last_agent_response = conversation_history[-1]['content'] if conversation_history else ''
                 adapt_messages = [
                     {"role": "system", "content": system_prompt},
                     *conversation_history,
                     {
                         "role": "user",
-                        "content": f"The agent just said: {conversation_history[-1]['content'] if conversation_history else ''}\n\n"
-                        f"Your planned message was: {user_message}\n\n"
-                        "Adapt your response if needed based on the conversation flow. "
-                        "Return only the message you want to send (no explanation).",
+                        "content": f"""The agent just responded: "{last_agent_response}"
+
+Your next planned message was: "{user_message}"
+
+Adapt your response naturally based on what the agent said.
+- If the agent asked a question, answer it using your EXACT persona details
+- If the agent confirmed something, acknowledge it
+- If the agent refused, respond naturally (don't argue unless that's your goal)
+- Stay on task toward your scenario goal
+
+IMPORTANT: Use your real persona data (phone, name, etc.) - do not make up values.
+
+Return ONLY the message you want to send. No explanations or quotes.""",
                     },
                 ]
                 response = await llm_client.chat(adapt_messages, temperature=0.3)

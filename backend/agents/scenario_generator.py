@@ -90,65 +90,106 @@ def _build_system_prompt(state: ATAGraphState) -> str:
     world_state = state["world_state_input"]
     test_config = state["test_config"]
 
-#TODO to be enhanced
-    return f"""You are a scenario generator for an agent testing framework.
+    import json
+    entities_json = json.dumps(world_state.entities, indent=2)
+    catalog_json = json.dumps(world_state.catalog, indent=2)
+    constraints_json = json.dumps(world_state.constraints, indent=2)
+    context_json = json.dumps(world_state.context, indent=2)
+
+    return f"""You are a test scenario generator for an AI agent testing framework.
 
 ## Agent Under Test
-Name: {agent.name}
-Description: {agent.description}
-Capabilities: {', '.join(agent.capabilities)}
-Known Limitations: {', '.join(agent.known_limitations)}
+- Name: {agent.name}
+- Description: {agent.description}
+- Capabilities: {', '.join(agent.capabilities) if agent.capabilities else 'general conversation'}
+- Known Limitations (DO NOT test these): {', '.join(agent.known_limitations) if agent.known_limitations else 'none'}
 
-## World State
-Entities: {world_state.entities}
-Catalog: {world_state.catalog}
-Constraints: {world_state.constraints}
-Context: {world_state.context}
+## World State Data
 
-## Requirements
-Generate exactly {test_config.total} test scenarios:
-- {test_config.positive} positive scenarios (agent should succeed)
-- {test_config.negative} negative scenarios (agent should refuse/fail)
+### Entities (users, objects the agent can look up)
+{entities_json}
 
-## Rules for scenario generation
+### Catalog (available options the agent can offer)
+{catalog_json}
 
-1. POSITIVE scenarios test that the agent correctly handles valid requests within constraints.
-   - Use valid entities from world_state.entities
-   - Use valid values from world_state.catalog
-   - Respect all constraints
+### Constraints (rules the agent must follow)
+{constraints_json}
 
-2. NEGATIVE scenarios test that the agent correctly refuses invalid requests.
-   - Deliberately violate ONE constraint per scenario
-   - Use slightly mutated values (wrong phone digit, out-of-range time, unknown entity)
-   - Do NOT generate arbitrary nonsense - cross boundaries deliberately
+### Context (runtime facts)
+{context_json}
 
-3. Do NOT generate scenarios for known_limitations - those are out of scope.
+## Your Task
+Generate exactly {test_config.positive} POSITIVE and {test_config.negative} NEGATIVE test scenarios.
 
-4. Placeholders: Use {{{{path/to/value}}}} syntax to reference world_state values.
-   Example: {{{{entities/0/phone}}}} resolves to the first entity's phone number.
+IMPORTANT: Probes are ADDITIONAL scenarios that verify state changes. They do NOT count toward the {test_config.positive}/{test_config.negative} totals.
 
-5. For POSITIVE scenarios with stateful side effects:
-   - Generate a probe scenario with depends_on pointing to the primary scenario
-   - Set depends_on_type to "probe"
-   - Probe should attempt the same action again to verify state was updated
+## POSITIVE Scenarios (agent should succeed)
+- Test valid requests that follow all constraints
+- CRITICAL: User turns MUST use EXACT values from world_state
+  - Use the exact phone numbers from entities (e.g., "+1111111111", not made-up numbers)
+  - Use the exact slot times from catalog (e.g., "2026-05-20T10:00")
+  - Use the exact entity names from entities
+- If the scenario has a stateful side effect (booking, registration), add a PROBE scenario:
+  - Set depends_on to the parent scenario ID
+  - Set depends_on_type to "probe"
+  - The probe attempts the same action again - it should FAIL because state changed
 
-6. For NEGATIVE scenarios that could corrupt state if agent misbehaves:
-   - Generate a defensive_probe scenario with depends_on
-   - Set depends_on_type to "defensive_probe"
-   - Defensive probe verifies no state corruption occurred
+## NEGATIVE Scenarios (agent should refuse)
+- Test invalid requests that violate exactly ONE constraint
+- Ways to create invalid scenarios:
+  - Use an entity that doesn't exist (e.g., phone "+9999999999" not in entities)
+  - Use a catalog value that doesn't exist (e.g., slot "2026-05-20T08:00" not in catalog)
+  - Violate a constraint (e.g., unregistered user trying to book if constraint says "only registered users can book")
+- If the negative scenario could corrupt state, add a DEFENSIVE_PROBE:
+  - Set depends_on_type to "defensive_probe"
+  - Verifies state wasn't corrupted by the invalid request
 
-7. Assertions:
-   - world_state assertions: path (JSON pointer), operator (removed|added|equals|contains|not_contains)
-   - transcript assertions: semantic check evaluated by LLM
-   - behavioral assertions: expected_behavior (refusal|confirmation|clarification|escalation)
+## Turn Writing Rules
+1. Each turn is a single user message (string)
+2. Write realistic conversational messages, not commands
+3. Include the persona's actual data in the message:
+   - GOOD: "Hi, my phone number is +1111111111"
+   - BAD: "Hi, my phone number is 123-456-7890" (made up)
+4. Keep turns concise - 1-3 sentences each
+5. Typical flow: greeting → provide identity → state request → confirm details
 
-8. Each scenario ID must be unique. Use descriptive kebab-case IDs.
+## Assertion Writing Rules
 
-9. Turns are user messages in sequence. Keep them realistic for the persona."""
+### world_state assertions (for stateful scenarios)
+- path: JSON pointer to the value (e.g., "/catalog/slots/2026-05-20T10:00")
+- operator: "removed" (value was deleted), "added" (value was created), "equals" (value matches expected), "contains", "not_contains"
+- expected_value: the expected value (required for equals/contains/not_contains)
+- Example: After booking slot X, use operator "removed" with path "/catalog/slots/X" OR operator "equals" with expected_value "booked"
+
+### transcript assertions (for conversation checks)
+- check: natural language condition (e.g., "agent confirmed the booking with a confirmation number")
+- speaker: "agent" or "user"
+
+### behavioral assertions (for behavior classification)
+- expected_behavior: "confirmation" (agent confirms action), "refusal" (agent declines), "clarification" (agent asks for more info), "escalation" (agent escalates)
+
+## Output Format
+Return scenarios as a JSON array. Each scenario has:
+- id: unique kebab-case identifier
+- type: "positive" or "negative"
+- description: what this test verifies
+- turns: array of user message strings
+- persona: entity ID if acting as a specific entity (optional)
+- assertions: array of assertion objects
+- depends_on: parent scenario ID (only for probes)
+- depends_on_type: "probe" or "defensive_probe" (only when depends_on is set)"""
 
 
 def _build_user_prompt() -> str:
-    return "Generate the test scenarios now. Return them as a structured output with a 'scenarios' array."
+    return """Generate the test scenarios now.
+
+Remember:
+1. Use EXACT values from world_state (real phone numbers, real slot times, real entity names)
+2. Probes are ADDITIONAL and don't count toward the positive/negative totals
+3. Each positive scenario with side effects needs a probe
+4. Each negative scenario that could corrupt state needs a defensive_probe
+
+Return structured output with a 'scenarios' array."""
 
 
 async def scenario_generator_node(

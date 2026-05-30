@@ -54,39 +54,75 @@ PATCH_TOOL = {
 def _build_patcher_prompt(
     transcript: Transcript, world_state: WorldState
 ) -> list[dict[str, str]]:
+    import json
+
     transcript_text = "\n".join(
-        f"User: {turn.user_message}\nAgent: {turn.agent_response}"
-        for turn in transcript.turns
+        f"Turn {i+1}:\n  User: {turn.user_message}\n  Agent: {turn.agent_response}"
+        for i, turn in enumerate(transcript.turns)
     )
 
-    world_state_json = world_state.to_dict()
+    world_state_json = json.dumps(world_state.to_dict(), indent=2)
 
-    system_prompt = f"""You are analyzing a conversation transcript to infer what changes should be made to the world state.
+    system_prompt = f"""You analyze conversation transcripts to determine what world_state changes occurred.
 
-Current world_state:
+## Current World State
+```json
 {world_state_json}
+```
 
-Your task:
-1. Analyze the conversation to determine if any actions were completed
-2. If the agent confirmed completing an action (booking, update, deletion, etc.), emit the corresponding patch operations
-3. If the agent refused or the action was not completed, emit NO operations
-4. Only emit operations for COMPLETED actions, not attempted ones
+## Your Task
+1. Read the conversation transcript
+2. Identify if the agent CONFIRMED completing any action (booking, registration, update, etc.)
+3. Emit patch operations ONLY for confirmed, completed actions
+4. If the agent refused, failed, or action was not completed → emit empty ops array
 
-Rules for patches:
-- Use JSON Pointer paths (e.g., /entities/0/verified, /catalog/available_slots/0)
-- For removing items from arrays, use "remove" with the index path
-- For updating values, use "replace"
-- For adding new items, use "add"
-- Paths must exist in the current world_state (for remove/replace/move)
-- Do not invent values - only use values from the conversation or world_state
+## Patch Operation Rules
 
-If uncertain about any mutation, emit an empty ops array. Freezing state is safer than a wrong mutation."""
+### When to use each operation:
+- **remove**: Delete a value (e.g., remove a booked slot from available slots)
+  - Path must exist in current state
+- **replace**: Update an existing value (e.g., change slot status from "available" to "booked")
+  - Path must exist in current state
+- **add**: Add a new value (e.g., add a new reservation to an array)
+  - Parent path must exist
 
-    user_prompt = f"""Conversation transcript:
+### Path Format (JSON Pointer)
+- Use forward slashes: /catalog/slots/2026-05-20T10:00
+- Array indices are numbers: /entities/0/verified
+- Keys with special chars need escaping: /catalog/slots/2026-05-20T10:00
+
+### Examples
+
+Scenario: Agent confirmed booking slot "2026-05-20T10:00"
+```json
+{{"ops": [{{"op": "remove", "path": "/catalog/slots/2026-05-20T10:00"}}]}}
+```
+OR
+```json
+{{"ops": [{{"op": "replace", "path": "/catalog/slots/2026-05-20T10:00", "value": "booked"}}]}}
+```
+
+Scenario: Agent registered new user with phone +5555555555
+```json
+{{"ops": [{{"op": "add", "path": "/entities/-", "value": {{"phone": "+5555555555", "name": "NewUser", "registered": true}}}}]}}
+```
+
+Scenario: Agent refused or action failed
+```json
+{{"ops": []}}
+```
+
+## Critical Rules
+- ONLY patch for CONFIRMED actions (agent explicitly said it's done)
+- Do NOT patch for attempted but failed actions
+- Do NOT invent values - use exact values from conversation or world_state
+- When uncertain, emit empty ops array (safe default)"""
+
+    user_prompt = f"""## Conversation Transcript
 {transcript_text}
 
-Analyze this conversation and call the patch_world_state tool with the appropriate operations.
-If no state changes should occur, call it with an empty ops array."""
+Analyze this conversation. Did the agent confirm completing any state-changing action?
+Call patch_world_state with the appropriate operations (or empty array if no changes)."""
 
     return [
         {"role": "system", "content": system_prompt},

@@ -137,21 +137,31 @@ async def _evaluate_transcript_assertion(
     llm_client: LLMClient,
 ) -> AssertionResult:
     transcript_text = "\n".join(
-        f"User: {turn.user_message}\nAgent: {turn.agent_response}"
-        for turn in transcript.turns
+        f"Turn {i+1}:\n  User: {turn.user_message}\n  Agent: {turn.agent_response}"
+        for i, turn in enumerate(transcript.turns)
     )
 
-    system_prompt = """You are evaluating whether a conversation transcript satisfies a specific check.
-Return a JSON object with:
-- satisfied: boolean indicating if the check is satisfied
-- reasoning: brief explanation of your evaluation"""
+    system_prompt = """You are evaluating whether a conversation transcript satisfies a specific semantic check.
 
-    user_prompt = f"""Transcript:
+Your task:
+1. Read the transcript carefully
+2. Focus on the specified speaker's messages
+3. Determine if the check condition is met
+4. Be strict but fair - the check must be clearly satisfied, not just partially
+
+Return a JSON with:
+- satisfied: true if the check is clearly satisfied, false otherwise
+- reasoning: 1-2 sentences explaining your evaluation"""
+
+    user_prompt = f"""## Conversation Transcript
 {transcript_text}
 
-Check to evaluate (for {assertion.speaker}): {assertion.check}
+## Check to Evaluate
+Speaker to focus on: {assertion.speaker.upper()}
+Condition: {assertion.check}
+Description: {assertion.description}
 
-Does this transcript satisfy the check? Focus on the {assertion.speaker}'s messages."""
+Is this condition satisfied by the {assertion.speaker}'s messages in the transcript?"""
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -170,27 +180,36 @@ async def _evaluate_behavioral_assertion(
     llm_client: LLMClient,
 ) -> AssertionResult:
     transcript_text = "\n".join(
-        f"User: {turn.user_message}\nAgent: {turn.agent_response}"
-        for turn in transcript.turns
+        f"Turn {i+1}:\n  User: {turn.user_message}\n  Agent: {turn.agent_response}"
+        for i, turn in enumerate(transcript.turns)
     )
 
-    system_prompt = """You are classifying the agent's behavior in a conversation.
-Possible behaviors:
-- refusal: Agent declined to perform the requested action
-- confirmation: Agent confirmed completing the requested action
-- clarification: Agent asked for more information
-- escalation: Agent escalated to a human or different system
+    system_prompt = """You are classifying the agent's overall behavior in a conversation.
 
-Return a JSON object with:
-- satisfied: boolean indicating if the agent exhibited the expected behavior
-- reasoning: brief explanation including which behavior was observed"""
+## Behavior Definitions
+- **confirmation**: Agent successfully completed the user's request and confirmed it (e.g., "Your booking is confirmed", "I've registered you")
+- **refusal**: Agent explicitly declined the request (e.g., "I cannot do that", "That's not possible", "You're not authorized")
+- **clarification**: Agent asked for more information before proceeding (e.g., "Could you provide your phone number?", "Which slot would you prefer?")
+- **escalation**: Agent transferred to a human or another system (e.g., "Let me connect you to a representative")
 
-    user_prompt = f"""Transcript:
+## Important Notes
+- Look at the FINAL outcome, not intermediate steps
+- If agent asked for clarification but then completed the action, that's "confirmation"
+- If agent asked for info but never completed the action, consider the last state
+- Partial completion or errors are NOT confirmation
+
+Return a JSON with:
+- satisfied: true if the agent exhibited the expected behavior, false otherwise
+- reasoning: 1-2 sentences explaining what behavior was observed"""
+
+    user_prompt = f"""## Conversation Transcript
 {transcript_text}
 
-Expected behavior: {assertion.expected_behavior}
+## Expected Behavior
+{assertion.expected_behavior}
+Description: {assertion.description}
 
-Did the agent exhibit this behavior?"""
+Did the agent ultimately exhibit "{assertion.expected_behavior}" behavior?"""
 
     messages = [
         {"role": "system", "content": system_prompt},

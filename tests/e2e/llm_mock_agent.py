@@ -91,7 +91,7 @@ async def chat(request: ChatRequest, req: Request, response: Response):
         req.app.state.sessions[session_id] = []
 
     session_history = req.app.state.sessions[session_id]
-    session_history.append({"role": "user", "context": request.message})
+    session_history.append({"role": "user", "content": request.message})
 
     system_prompt = """
     ou are a reservation assistant. Available slots: "2026-05-20T10:00" and "2026-05-20T14:00".
@@ -111,26 +111,29 @@ async def chat(request: ChatRequest, req: Request, response: Response):
         {"name": "create_reservation", "description": "Add booking", "parameters": {"type": "object", "properties": {"phone": {"type": "string"}, "slot": {"type": "string"}}, "required": ["phone", "slot"]}}
     ]
 
-    for _ in range(3):
-        res_llm = await llm_client.chat(messages, tools = tools, temperature=0.0)
+    for _ in range(5):
+        res_llm = await llm_client.chat(messages, tools=tools, temperature=0.0)
         if not res_llm.tool_calls:
             session_history.append({"role": "assistant", "content": res_llm.content})
             return ChatResponse(response=res_llm.content, session_id=session_id)
-        
-        #record tool call
-        messages.append({"role": "assistant", "content": res_llm.content or "", "tool_calls": res_llm.tool_calls})
 
-        fallback = "I am processing your request. Please try again."
-        session_history.append({"role": "assistant", "content": fallback})
+        openai_tool_calls = [
+            {
+                "id": tc.get("id", tc["name"]),
+                "type": "function",
+                "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])}
+            }
+            for tc in res_llm.tool_calls
+        ]
+        messages.append({"role": "assistant", "content": res_llm.content or "", "tool_calls": openai_tool_calls})
 
         for tool_call in res_llm.tool_calls:
             name = tool_call["name"]
             args = tool_call["arguments"]
             res_id = tool_call.get("id", name)
             tool_result = execute_tool(name, args, db_path, disability)
+            messages.append({"role": "tool", "content": json.dumps(tool_result), "tool_call_id": res_id})
 
-            messages.append({"role": "tool", "name": name, "content": json.dump(tool_result), "tool_call_id": res_id})
-
-        fallback = "I am processing your request. please try again."
-        session_history.append({"role": "assistant", "content": fallback})
-        return ChatResponse(response=fallback, session_id=session_id)
+    fallback = "I was unable to complete your request after multiple attempts."
+    session_history.append({"role": "assistant", "content": fallback})
+    return ChatResponse(response=fallback, session_id=session_id)

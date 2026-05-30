@@ -26,7 +26,7 @@ class TestConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    provider: str = Field(pattern=r"^(anthropic|openai|google)$")
+    provider: str = Field(pattern=r"^(anthropic|openai|google|openrouter|ollama)$")
     model: str
 
 
