@@ -86,7 +86,7 @@ async def test_patcher_applies_patch_successfully(
     result = await world_state_patcher_node(state, mock_llm_client)
 
     assert result["status"] == "batch_patched"
-    assert result["patch_failed"] is False
+    assert result["patch_failed_scenario_ids"] == []
     assert "booking-scenario" in result["patch_ops"]
     assert len(result["world_state"].data["catalog"]["slots"]) == 1
 
@@ -117,7 +117,7 @@ async def test_patcher_empty_ops_when_no_changes(
 
     result = await world_state_patcher_node(state, mock_llm_client)
 
-    assert result["patch_failed"] is False
+    assert result["patch_failed_scenario_ids"] == []
     assert result["patch_ops"]["booking-scenario"] == []
 
 
@@ -175,8 +175,9 @@ async def test_patcher_validation_failure_cascades(mock_llm_client, sample_world
 
     result = await world_state_patcher_node(state, mock_llm_client)
 
-    assert result["patch_failed"] is True
-    assert result["patch_failed_scenario_id"] == "scenario-1"
+    assert "scenario-1" in result["patch_failed_scenario_ids"]
+    assert "scenario-1" in result["patch_failed_reasons"]
+    assert result["verdicts"]["scenario-1"].verdict == Verdict.ERROR
     assert "scenario-2" in result["skipped_scenarios"]
     assert result["verdicts"]["scenario-2"].verdict == Verdict.ERROR
 
@@ -274,8 +275,9 @@ async def test_patcher_llm_error_cascades(mock_llm_client, sample_world_state, s
 
     result = await world_state_patcher_node(state, mock_llm_client)
 
-    assert result["patch_failed"] is True
-    assert "LLM error" in result["patch_failed_reason"]
+    assert "booking-scenario" in result["patch_failed_scenario_ids"]
+    assert "LLM error" in result["patch_failed_reasons"]["booking-scenario"]
+    assert result["verdicts"]["booking-scenario"].verdict == Verdict.ERROR
 
 
 @pytest.mark.asyncio

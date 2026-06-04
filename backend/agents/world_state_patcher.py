@@ -143,9 +143,10 @@ async def world_state_patcher_node(
     patch_ops = dict(state.get("patch_ops", {}))
     world_state_snapshots = dict(state.get("world_state_snapshots", {}))
 
-    patch_failed = False
-    patch_failed_scenario_id = None
-    patch_failed_reason = None
+    patch_failed_scenario_ids = list(state.get("patch_failed_scenario_ids", []))
+    patch_failed_reasons = dict(state.get("patch_failed_reasons", {}))
+
+    dag = build_dag(all_scenarios)
 
     for scenario in batch_scenarios:
         if scenario.id in skipped:
@@ -181,28 +182,34 @@ async def world_state_patcher_node(
                 try:
                     world_state.apply_patch(ops)
                 except PatchValidationError as e:
-                    patch_failed = True
-                    patch_failed_scenario_id = scenario.id
-                    patch_failed_reason = str(e)
+                    reason = str(e)
+                    patch_failed_scenario_ids.append(scenario.id)
+                    patch_failed_reasons[scenario.id] = reason
+                    verdicts[scenario.id] = ScenarioVerdict(
+                        scenario_id=scenario.id,
+                        verdict=Verdict.ERROR,
+                        reason=f"PATCH_FAILED: {reason}",
+                    )
 
-                    dag = build_dag(all_scenarios)
-                    newly_skipped = cascade_skip(dag, scenario.id, verdicts, str(e))
+                    newly_skipped = cascade_skip(dag, scenario.id, verdicts, reason)
                     skipped.update(newly_skipped)
-
-                    break
+                    continue
 
             after_key = f"{scenario.id}_after"
             world_state_snapshots[after_key] = world_state.to_dict()
 
         except Exception as e:
-            patch_failed = True
-            patch_failed_scenario_id = scenario.id
-            patch_failed_reason = f"LLM error: {str(e)}"
+            reason = f"LLM error: {str(e)}"
+            patch_failed_scenario_ids.append(scenario.id)
+            patch_failed_reasons[scenario.id] = reason
+            verdicts[scenario.id] = ScenarioVerdict(
+                scenario_id=scenario.id,
+                verdict=Verdict.ERROR,
+                reason=f"PATCH_FAILED: {reason}",
+            )
 
-            dag = build_dag(all_scenarios)
-            newly_skipped = cascade_skip(dag, scenario.id, verdicts, str(e))
+            newly_skipped = cascade_skip(dag, scenario.id, verdicts, reason)
             skipped.update(newly_skipped)
-            break
 
     return {
         "world_state": world_state,
@@ -210,9 +217,8 @@ async def world_state_patcher_node(
         "world_state_snapshots": world_state_snapshots,
         "verdicts": verdicts,
         "skipped_scenarios": skipped,
-        "patch_failed": patch_failed,
-        "patch_failed_scenario_id": patch_failed_scenario_id,
-        "patch_failed_reason": patch_failed_reason,
+        "patch_failed_scenario_ids": patch_failed_scenario_ids,
+        "patch_failed_reasons": patch_failed_reasons,
         "status": "batch_patched",
     }
 

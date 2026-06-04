@@ -9,7 +9,6 @@ from backend.agents.orchestrator import (
     _advance_batch_node,
     _should_continue_after_generate,
     _should_continue_after_prepare,
-    _should_continue_after_patcher,
 )
 from backend.agents.state import ATAGraphState
 from backend.models.suite import Scenario, ScenarioType
@@ -193,15 +192,6 @@ class TestConditionalEdges:
         result = _should_continue_after_prepare(state)
         assert result == "reporter"
 
-    def test_should_continue_after_patcher_success(self):
-        state = ATAGraphState(patch_failed=False)
-        result = _should_continue_after_patcher(state)
-        assert result == "advance_batch"
-
-    def test_should_continue_after_patcher_failed(self):
-        state = ATAGraphState(patch_failed=True)
-        result = _should_continue_after_patcher(state)
-        assert result == "advance_batch"
 
 
 class TestBuildGraph:

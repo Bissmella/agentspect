@@ -37,9 +37,8 @@ def _initialize_state(yaml_input: YAMLInput) -> ATAGraphState:
         patch_ops={},
         world_state_snapshots={},
         skipped_scenarios=set(),
-        patch_failed=False,
-        patch_failed_scenario_id=None,
-        patch_failed_reason=None,
+        patch_failed_scenario_ids=[],
+        patch_failed_reasons={},
         report={},
         error=None,
         status="initialized",
@@ -118,9 +117,7 @@ def _advance_batch_node(state: ATAGraphState) -> dict[str, Any]:
 def _should_continue_after_generate(
     state: ATAGraphState,
 ) -> Literal["prepare_batch", "end"]:
-    if state.get("error"):
-        return "end"
-    if state.get("status") == "failed":
+    if state.get("error") or state.get("status") == "failed":
         return "end"
     return "prepare_batch"
 
@@ -131,14 +128,6 @@ def _should_continue_after_prepare(
     if state.get("status") == "all_batches_complete":
         return "reporter"
     return "user_simulator"
-
-
-def _should_continue_after_patcher(
-    state: ATAGraphState,
-) -> Literal["advance_batch", "end"]:
-    if state.get("patch_failed"):
-        return "advance_batch"
-    return "advance_batch"
 
 
 def build_graph(
@@ -178,14 +167,7 @@ def build_graph(
     graph.add_edge("user_simulator", "scorer")
     graph.add_edge("scorer", "world_state_patcher")
 
-    graph.add_conditional_edges(
-        "world_state_patcher",
-        _should_continue_after_patcher,
-        {
-            "advance_batch": "advance_batch",
-            "end": END,
-        },
-    )
+    graph.add_edge("world_state_patcher", "advance_batch")
 
     graph.add_edge("advance_batch", "prepare_batch")
     graph.add_edge("reporter", END)
@@ -207,7 +189,22 @@ class OrchestratorAgent:
 
     def _emit_progress(self, event: str, data: dict[str, Any] | None = None) -> None:
         if self.progress_callback:
-            self.progress_callback(event, data or {})
+            payload = {
+                "event": event,
+                "status": None,
+                "error": None,
+                "node": None,
+            }
+            if data:
+                payload.update(data)
+            self.progress_callback(event, payload)
+
+    async def _close_adapter(self) -> None:
+        if self._adapter:
+            try:
+                await self._adapter.close()
+            except Exception:
+                pass
 
     async def initialize(self) -> ATAGraphState:
         self._emit_progress("parsing_yaml")
@@ -221,16 +218,29 @@ class OrchestratorAgent:
         self._emit_progress("yaml_validated", {"hash": yaml_hash})
 
         llm_config = yaml_input.llm_config
-        self._llm_client = create_llm_client(
-            provider=llm_config.provider,
-            model=llm_config.model,
-        )
+        try:
+            self._llm_client = create_llm_client(
+                provider=llm_config.provider,
+                model=llm_config.model,
+            )
+        except Exception as e:
+            self._emit_progress("initialization_failed", {
+                "error": f"LLM client creation failed: {e}",
+            })
+            raise RuntimeError(f"Failed to create LLM client for provider '{llm_config.provider}': {e}") from e
 
         agent_config = yaml_input.agent_under_test
-        self._adapter = create_adapter(
-            protocol=agent_config.protocol,
-            url=agent_config.url,
-        )
+        try:
+            self._adapter = create_adapter(
+                protocol=agent_config.protocol,
+                url=agent_config.url,
+            )
+        except Exception as e:
+            self._llm_client = None
+            self._emit_progress("initialization_failed", {
+                "error": f"Protocol adapter creation failed: {e}",
+            })
+            raise RuntimeError(f"Failed to create {agent_config.protocol} adapter for '{agent_config.url}': {e}") from e
 
         self._graph = build_graph(self._llm_client, self._adapter)
 
@@ -249,22 +259,27 @@ class OrchestratorAgent:
 
         compiled = self._graph.compile()
 
-        final_state = None
-        async for event in compiled.astream(initial_state):
-            for node_name, node_output in event.items():
-                status = node_output.get("status", "")
-                self._emit_progress(f"node_{node_name}", {
-                    "status": status,
-                    "error": node_output.get("error"),
-                })
+        try:
+            final_state = None
+            async for event in compiled.astream(initial_state):
+                for node_name, node_output in event.items():
+                    self._emit_progress(f"node_{node_name}", {
+                        "node": node_name,
+                        "status": node_output.get("status"),
+                        "error": node_output.get("error"),
+                    })
 
-                if node_name == "reporter":
-                    final_state = node_output
+                    if node_name == "reporter":
+                        final_state = node_output
+        finally:
+            await self._close_adapter()
 
-        if self._adapter:
-            await self._adapter.close()
+        if not final_state or "report" not in final_state:
+            error_msg = initial_state.get("error", "Reporter node never executed")
+            self._emit_progress("completed", {"error": error_msg})
+            raise RuntimeError(f"Suite run did not produce a report: {error_msg}")
 
-        report = final_state.get("report", {}) if final_state else {}
+        report = final_state["report"]
         self._emit_progress("completed", {
             "verdict_counts": report.get("verdict_counts", {}),
         })
@@ -277,20 +292,25 @@ class OrchestratorAgent:
 
         compiled = self._graph.compile()
 
-        final_state = None
-        async for event in compiled.astream(state):
-            for node_name, node_output in event.items():
-                self._emit_progress(f"node_{node_name}", {
-                    "status": node_output.get("status", ""),
-                })
+        try:
+            final_state = None
+            async for event in compiled.astream(state):
+                for node_name, node_output in event.items():
+                    self._emit_progress(f"node_{node_name}", {
+                        "node": node_name,
+                        "status": node_output.get("status"),
+                        "error": node_output.get("error"),
+                    })
 
-                if node_name == "reporter":
-                    final_state = node_output
+                    if node_name == "reporter":
+                        final_state = node_output
+        finally:
+            await self._close_adapter()
 
-        if self._adapter:
-            await self._adapter.close()
+        if not final_state or "report" not in final_state:
+            raise RuntimeError("Suite run did not produce a report")
 
-        return final_state.get("report", {}) if final_state else {}
+        return final_state["report"]
 
 
 async def run_suite(

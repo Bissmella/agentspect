@@ -22,6 +22,9 @@ class ProtocolAdapter(ABC):
     async def end_session(self, session_id: str) -> None:
         pass
 
+    async def close(self) -> None:
+        pass
+
     def create_transcript(self, scenario_id: str, session_id: str, protocol: str) -> Transcript:
         return Transcript(
             scenario_id=scenario_id,

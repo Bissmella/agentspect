@@ -25,9 +25,8 @@ class ATAGraphState(TypedDict, total=False):
     world_state_snapshots: dict[str, dict[str, Any]]
 
     skipped_scenarios: set[str]
-    patch_failed: bool
-    patch_failed_scenario_id: str | None
-    patch_failed_reason: str | None
+    patch_failed_scenario_ids: list[str]
+    patch_failed_reasons: dict[str, str]
 
     report: dict[str, Any]
 
