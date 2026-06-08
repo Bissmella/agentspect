@@ -42,12 +42,35 @@
   - World_state audit trail
   - LLM-generated failure analysis
 
-## Test Coverage
-- 117 unit tests passing
-- All Phase 1, 2, and 3 components tested
+### Phase 4: LangGraph Orchestration ✅
+- StateGraph wiring all 6 agent nodes
+- Graph flow: generate_scenarios → prepare_batch → user_simulator → scorer → world_state_patcher → advance_batch → (loop) → reporter → END
+- Conditional edges for batch routing and error handling
+- `OrchestratorAgent` class with `run()` and progress callbacks
+- `run_suite(yaml_str, progress_callback)` entry point
+- Integration tests with real LLM against mock agents passing
 
-## Next: Phase 4 — LangGraph Orchestration
-- Wire all agent nodes into a StateGraph
-- Define graph flow: parse → generate → execute_batch → score → patch → repeat → report
-- Implement batch routing and parallel execution
-- Integration tests with full graph
+### Phase 5: Celery + Redis + FastAPI API ✅
+- `backend/celery_app.py` — Celery instance with Redis broker/backend
+- `backend/services/blob.py` — S3/MinIO blob storage (upload/download JSON, ensure bucket, async wrappers)
+- `backend/pubsub.py` — Redis pub/sub (sync publish, async subscribe, event history for late joiners)
+- `backend/tasks.py` — Celery task bridging sync worker to async orchestrator via `asyncio.run()`, stores results to DB + S3
+- `backend/schemas/run.py` — API request/response Pydantic models
+- `backend/dependencies.py` — FastAPI dependency injection (DB session, async Redis)
+- `backend/main.py` — FastAPI app with 6 endpoints:
+  - POST `/api/runs` — validate YAML, create Suite, enqueue Celery task
+  - GET `/api/runs/{id}` — suite status + scenario summaries
+  - GET `/api/runs/{id}/report` — final report from DB + S3
+  - GET `/api/runs/{id}/scenarios` — all scenarios with verdicts
+  - GET `/api/runs/{id}/scenarios/{sid}/transcript` — transcript from S3
+  - WS `/api/runs/{id}/ws` — live progress via Redis pub/sub
+
+## Test Coverage
+- 185 unit tests passing
+- 2 e2e integration tests passing (healthy agent + broken agent)
+- All Phases 1-5 components tested
+
+## Next: Phase 6 — React Frontend
+- CodeMirror YAML editor + provider/model selector
+- Live run dashboard via WebSocket
+- Report viewer with verdict breakdown, transcript viewer, world_state diffs
