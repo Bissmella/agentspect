@@ -1,19 +1,6 @@
 
-The scenarios for which world state patcher fails should be tracked, and dependent scenarios to that should be skipped
-- world_state_patcher.py  lines 150 151
-
-- orchestrator.py / _should_continue_after_patcher is a dead branch and continues advance all times
-
-
-- orchestrator.py   run()  silently returns empty dict if reporter never fires
-
-- orchestrator.py   _should_continue_after_generate  cheks status == "failed" but nothing is setting that
-
-- orchestrator.py    run()  the _adapter is never closed on error paths
-
-
-- orchestrator.py   initialize()  can partially succeed and leave state inconsistent. catch specific exceptions from each step and wrap them in a structured error with clear message
-
-
-- orchestrator.py   the progress events lose information when node_output has no status. define a fixed progress event schema and always emit that shape.
-
+- in pubsub.py in subscribe_events implementation, every single user connections is opening a new TCP connection to Redis:
+ `client = aioredis.Redis.from_url(settings.redis_url, decode_responses=True)`
+ Redis has a default limit on concurrent connection (usually 10,000). if there are a lot of users it might crash.
+ possible fix: initialize one global redis client when FastAPI starts and share it across all websockets, or use a shared connection pool.
+ if the current implementation is done as is intentionally then provide explanation.
