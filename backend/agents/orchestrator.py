@@ -275,7 +275,7 @@ class OrchestratorAgent:
             await self._close_adapter()
 
         if not final_state or "report" not in final_state:
-            error_msg = initial_state.get("error", "Reporter node never executed")
+            error_msg = initial_state.get("error") or "Reporter node never executed"
             self._emit_progress("completed", {"error": error_msg})
             raise RuntimeError(f"Suite run did not produce a report: {error_msg}")
 

@@ -82,7 +82,7 @@ async def chat(request: ChatRequest, req: Request, response: Response):
     db_path = getattr(req.app.state, "db_path", "llm_agent_db.json")
     disability = getattr(req.app.state, "disability", None)
 
-    llm_client = getattr(req.app.state, "llm_client", None) or create_llm_client("openai", "gpt-4o")
+    llm_client = getattr(req.app.state, "llm_client", None) or create_llm_client("openrouter", "openai/gpt-4o-mini")
     session_id = request.session_id or "default_session"
 
     if not hasattr(req.app.state, "sessions"):
