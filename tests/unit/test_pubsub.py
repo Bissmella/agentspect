@@ -20,10 +20,10 @@ class TestChannelNaming:
 
 
 class TestPublishEvent:
-    @patch("backend.pubsub.redis.Redis")
-    def test_publishes_and_stores_history(self, mock_redis_cls):
+    @patch("backend.pubsub._get_sync_redis")
+    def test_publishes_and_stores_history(self, mock_get_redis):
         mock_client = MagicMock()
-        mock_redis_cls.from_url.return_value = mock_client
+        mock_get_redis.return_value = mock_client
 
         from backend.pubsub import _seq_counters
         _seq_counters.pop("suite-1", None)
@@ -44,12 +44,11 @@ class TestPublishEvent:
         mock_client.expire.assert_called_once_with(
             "ata:suite:suite-1:history", HISTORY_TTL_SECONDS
         )
-        mock_client.close.assert_called_once()
 
-    @patch("backend.pubsub.redis.Redis")
-    def test_seq_increments(self, mock_redis_cls):
+    @patch("backend.pubsub._get_sync_redis")
+    def test_seq_increments(self, mock_get_redis):
         mock_client = MagicMock()
-        mock_redis_cls.from_url.return_value = mock_client
+        mock_get_redis.return_value = mock_client
 
         from backend.pubsub import _seq_counters
         _seq_counters.pop("suite-2", None)
@@ -63,10 +62,10 @@ class TestPublishEvent:
         assert payload_a["seq"] == 1
         assert payload_b["seq"] == 2
 
-    @patch("backend.pubsub.redis.Redis")
-    def test_default_empty_data(self, mock_redis_cls):
+    @patch("backend.pubsub._get_sync_redis")
+    def test_default_empty_data(self, mock_get_redis):
         mock_client = MagicMock()
-        mock_redis_cls.from_url.return_value = mock_client
+        mock_get_redis.return_value = mock_client
 
         from backend.pubsub import _seq_counters
         _seq_counters.pop("suite-3", None)

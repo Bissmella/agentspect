@@ -41,7 +41,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir backend
     ports:
       - "8000:8000"
     depends_on:
@@ -54,12 +54,13 @@ services:
     env_file: .env
     volumes:
       - ".:/app"
+      - backend_venv:/app/.venv
 
   celery_worker:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: celery -A backend.celery_app worker --loglevel=info --concurrency=4
+    command: uv run celery -A backend.celery_app worker --loglevel=info --concurrency=4
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,12 +69,22 @@ services:
     env_file: .env
     volumes:
       - ".:/app"
+      - celery_venv:/app/.venv
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
 
   migrate:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: alembic upgrade head
+    command: uv run alembic upgrade head
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,3 +95,5 @@ services:
 volumes:
   pgdata:
   minio_data:
+  backend_venv:
+  celery_venv:
