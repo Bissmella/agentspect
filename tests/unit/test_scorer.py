@@ -6,7 +6,9 @@ from backend.agents.scorer import (
     ScorerAgent,
     scorer_node,
     _evaluate_world_state_assertion_deterministic,
+    _classify_recovery_quality,
     AssertionResult,
+    RecoveryClassification,
 )
 from backend.agents.state import ATAGraphState
 from backend.models.suite import (
@@ -341,6 +343,119 @@ async def test_scorer_with_probe_chain(mock_llm_client):
 
     assert "primary" in result["verdicts"]
     assert "probe" in result["verdicts"]
+
+
+@pytest.mark.asyncio
+async def test_scorer_negative_success_gets_recovery_quality(mock_llm_client):
+    mock_llm_client.chat_with_structured_output = AsyncMock(
+        side_effect=[
+            AssertionResult(satisfied=True, reasoning="Refused correctly"),
+            RecoveryClassification(quality="clean_refusal", reasoning="Polite decline"),
+        ]
+    )
+
+    scenario = Scenario(
+        id="neg-1",
+        type=ScenarioType.NEGATIVE,
+        description="Should refuse",
+        turns=["Bad request"],
+        assertions=[
+            BehavioralAssertion(description="Refuses", expected_behavior="refusal"),
+        ],
+    )
+    transcript = Transcript(
+        scenario_id="neg-1",
+        session_id="s",
+        protocol="http",
+        turns=[Turn(
+            user_message="Bad request",
+            agent_response="Sorry, I can't do that.",
+            timestamp=datetime.now(UTC),
+            latency_ms=50,
+        )],
+    )
+    state = ATAGraphState(
+        current_batch_scenarios=[scenario],
+        scenarios=[scenario],
+        transcripts={"neg-1": transcript},
+        verdicts={},
+        world_state_snapshots={},
+        skipped_scenarios=set(),
+    )
+
+    result = await scorer_node(state, mock_llm_client)
+    verdict = result["verdicts"]["neg-1"]
+    assert verdict.verdict == Verdict.SUCCESS
+    assert verdict.recovery_quality == "clean_refusal"
+
+
+@pytest.mark.asyncio
+async def test_scorer_positive_has_no_recovery_quality(
+    mock_llm_client, sample_scenario, sample_transcript
+):
+    state = ATAGraphState(
+        current_batch_scenarios=[sample_scenario],
+        scenarios=[sample_scenario],
+        transcripts={"test-scenario": sample_transcript},
+        verdicts={},
+        world_state_snapshots={
+            "test-scenario_before": {"slots": ["A"]},
+            "test-scenario_after": {"slots": []},
+        },
+        skipped_scenarios=set(),
+    )
+
+    result = await scorer_node(state, mock_llm_client)
+    verdict = result["verdicts"]["test-scenario"]
+    assert verdict.recovery_quality is None
+
+
+@pytest.mark.asyncio
+async def test_scorer_recovery_quality_llm_failure(mock_llm_client):
+    call_count = 0
+
+    async def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return AssertionResult(satisfied=True, reasoning="Refused")
+        raise Exception("LLM error")
+
+    mock_llm_client.chat_with_structured_output = AsyncMock(side_effect=side_effect)
+
+    scenario = Scenario(
+        id="neg-1",
+        type=ScenarioType.NEGATIVE,
+        description="Should refuse",
+        turns=["Bad"],
+        assertions=[
+            BehavioralAssertion(description="Refuses", expected_behavior="refusal"),
+        ],
+    )
+    transcript = Transcript(
+        scenario_id="neg-1",
+        session_id="s",
+        protocol="http",
+        turns=[Turn(
+            user_message="Bad",
+            agent_response="No",
+            timestamp=datetime.now(UTC),
+            latency_ms=50,
+        )],
+    )
+    state = ATAGraphState(
+        current_batch_scenarios=[scenario],
+        scenarios=[scenario],
+        transcripts={"neg-1": transcript},
+        verdicts={},
+        world_state_snapshots={},
+        skipped_scenarios=set(),
+    )
+
+    result = await scorer_node(state, mock_llm_client)
+    verdict = result["verdicts"]["neg-1"]
+    assert verdict.verdict == Verdict.SUCCESS
+    assert verdict.recovery_quality is None
 
 
 @pytest.mark.asyncio

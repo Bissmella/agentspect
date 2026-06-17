@@ -118,6 +118,8 @@ class Scenario(Base):
         String(512), nullable=True
     )
     patch_ops_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    target_constraint: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    recovery_quality: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     suite: Mapped["Suite"] = relationship(back_populates="scenarios")
     parent_scenario: Mapped["Scenario | None"] = relationship(

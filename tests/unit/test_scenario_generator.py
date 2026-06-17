@@ -186,6 +186,35 @@ async def test_scenario_generator_with_probes(sample_state, mock_llm_client):
 
 
 @pytest.mark.asyncio
+async def test_scenario_generator_target_constraint_passthrough(sample_state, mock_llm_client):
+    mock_llm_client.chat_with_structured_output.return_value = GeneratedScenarios(
+        scenarios=[
+            GeneratedScenario(
+                id="p1",
+                type="positive",
+                description="Valid booking",
+                turns=["Book"],
+            ),
+            GeneratedScenario(
+                id="n1",
+                type="negative",
+                description="Unverified user",
+                turns=["Book"],
+                target_constraint="only verified users can book",
+            ),
+        ]
+    )
+
+    result = await scenario_generator_node(sample_state, mock_llm_client)
+    assert result["status"] == "scenarios_generated"
+
+    positive = next(s for s in result["scenarios"] if s.id == "p1")
+    negative = next(s for s in result["scenarios"] if s.id == "n1")
+    assert positive.target_constraint is None
+    assert negative.target_constraint == "only verified users can book"
+
+
+@pytest.mark.asyncio
 async def test_scenario_generator_agent_class(sample_state, mock_llm_client):
     mock_llm_client.chat_with_structured_output.return_value = GeneratedScenarios(
         scenarios=[

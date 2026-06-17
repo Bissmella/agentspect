@@ -318,6 +318,40 @@ async def test_reporter_handles_missing_agent_info(
 
 
 @pytest.mark.asyncio
+async def test_reporter_includes_metrics(
+    mock_llm_client, sample_scenarios, sample_transcripts, sample_verdicts
+):
+    state = ATAGraphState(
+        agent_under_test=AgentUnderTest(
+            name="Test Agent",
+            url="http://localhost:8000",
+            protocol="http",
+            description="Test",
+        ),
+        world_state_input=WorldStateInput(),
+        scenarios=sample_scenarios,
+        transcripts=sample_transcripts,
+        verdicts=sample_verdicts,
+        world_state_snapshots={},
+        patch_ops={},
+    )
+
+    result = await reporter_node(state, mock_llm_client)
+
+    report = result["report"]
+    assert "metrics" in report
+    metrics = report["metrics"]
+    assert "task_completion" in metrics
+    assert "boundary_adherence" in metrics
+    assert "verification_rate" in metrics
+    assert "constraint_violations" in metrics
+    assert "recovery_behavior" in metrics
+    assert "conversation_efficiency" in metrics
+    assert metrics["task_completion"]["total"] == 1
+    assert metrics["boundary_adherence"]["total"] == 1
+
+
+@pytest.mark.asyncio
 async def test_reporter_agent_class(
     mock_llm_client, sample_scenarios, sample_transcripts, sample_verdicts
 ):

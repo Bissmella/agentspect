@@ -61,6 +61,7 @@ class Scenario(BaseModel):
     assertions: list[Assertion] = Field(default_factory=list)
     depends_on: str | None = None
     depends_on_type: DependsOnType | None = None
+    target_constraint: str | None = None
 
 
 class ScenarioVerdict(BaseModel):
@@ -68,3 +69,4 @@ class ScenarioVerdict(BaseModel):
     verdict: Verdict
     reason: str
     assertion_results: list[dict[str, Any]] = Field(default_factory=list)
+    recovery_quality: str | None = None

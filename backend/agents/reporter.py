@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from backend.agents.state import ATAGraphState
 from backend.llm.client import LLMClient
+from backend.metrics import compute_all_metrics
 from backend.models.suite import DependsOnType, ScenarioType, Verdict
 
 
@@ -123,6 +124,9 @@ async def reporter_node(
             "patch_ops": patch_ops.get(scenario.id, []),
         }
 
+        if scenario.target_constraint:
+            result["target_constraint"] = scenario.target_constraint
+
         if scenario.depends_on:
             result["depends_on"] = scenario.depends_on
             result["depends_on_type"] = scenario.depends_on_type.value if scenario.depends_on_type else None
@@ -177,11 +181,14 @@ async def reporter_node(
                 "recommendations": [],
             }
 
+    metrics = compute_all_metrics(scenarios, verdicts, transcripts)
+
     report = {
         "agent_name": agent_under_test.name if agent_under_test else "Unknown",
         "agent_url": agent_under_test.url if agent_under_test else None,
         "verdict_counts": dict(verdict_counts),
         "total_scenarios": len(scenarios),
+        "metrics": metrics.model_dump(),
         "scenarios": per_scenario_results,
         "probe_chains": probe_chains,
         "world_state_audit": world_state_audit,

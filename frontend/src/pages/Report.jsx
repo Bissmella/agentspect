@@ -1,6 +1,7 @@
 import { useParams, Link } from 'react-router-dom';
 import { useRun, useReport, useScenarios } from '../hooks/useRunQueries';
 import VerdictSummary from '../components/VerdictSummary';
+import MetricsDashboard from '../components/MetricsDashboard';
 import ScenarioCard from '../components/ScenarioCard';
 import ErrorAlert from '../components/ErrorAlert';
 
@@ -60,6 +61,14 @@ export default function Report() {
         <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Verdict Summary</h2>
         <VerdictSummary verdictCounts={verdictCounts} />
       </div>
+
+      {/* Quantitative metrics */}
+      {summary.metrics && (
+        <div className="bg-white border border-gray-200 rounded-lg p-5 mb-6">
+          <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Quantitative Metrics</h2>
+          <MetricsDashboard metrics={summary.metrics} />
+        </div>
+      )}
 
       {/* Failure analysis */}
       {failureAnalysis && (

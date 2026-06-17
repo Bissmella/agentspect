@@ -158,6 +158,8 @@ async def _store_results(
                 world_state_before_key=keys.get("ws_before"),
                 world_state_after_key=keys.get("ws_after"),
                 patch_ops_json=sc.get("patch_ops"),
+                target_constraint=sc.get("target_constraint"),
+                recovery_quality=sc.get("recovery_quality"),
             )
             session.add(scenario_row)
 
@@ -167,6 +169,7 @@ async def _store_results(
             "agent_name": report.get("agent_name"),
             "probe_chains": report.get("probe_chains", []),
             "failure_analysis": report.get("failure_analysis"),
+            "metrics": report.get("metrics"),
         }
 
         report_row = Report(
