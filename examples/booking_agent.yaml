@@ -1,0 +1,62 @@
+# Example: an appointment-booking assistant (WebSocket).
+#
+# Demonstrates a stateful agent with entities (customers), a catalog of
+# bookable slots, and constraints ATA can deliberately cross to generate
+# negative scenarios. Because bookings mutate world_state, ATA will also
+# generate probe scenarios to verify that a booked slot actually persisted.
+#
+# Run it from the UI (paste this file into "New Run") or via the API:
+#   curl -X POST http://localhost:8000/api/runs \
+#     -H 'Content-Type: application/json' \
+#     -d "{\"yaml_content\": $(python -c 'import json,sys;print(json.dumps(open(sys.argv[1]).read()))' examples/booking_agent.yaml)}"
+
+agent_under_test:
+  name: "CRM Booking Assistant"
+  url: "wss://crm.example.com/chat"
+  protocol: websocket
+  description: >
+    Books appointments for registered customers.
+    Identifies customers by phone number.
+    Only offers slots from the available calendar.
+    Refuses unregistered callers politely.
+  capabilities:
+    - appointment booking
+    - customer lookup
+    - slot availability check
+  known_limitations:
+    - does not handle rescheduling
+    - english and french only
+
+world_state:
+  entities:
+    - id: customer_1
+      phone: "+33612345678"
+      name: "Isabelle Martin"
+      verified: true
+    - id: customer_2
+      phone: "+33698765432"
+      name: "Jean Dupont"
+      verified: false
+  catalog:
+    available_slots:
+      - "2026-05-20T10:00"
+      - "2026-05-20T14:00"
+      - "2026-05-21T09:00"
+  constraints:
+    - "only verified entities can book"
+    - "slots must be within 09:00-18:00"
+    - "one booking per entity per day"
+  context:
+    current_time: "2026-05-16T08:00"
+    language: "fr"
+    channel: "voice"
+
+test_config:
+  total: 10
+  positive: 6
+  negative: 4
+
+llm_config:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  # ANTHROPIC_API_KEY is read from the environment, never from this file.

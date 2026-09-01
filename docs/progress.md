@@ -65,12 +65,28 @@
   - GET `/api/runs/{id}/scenarios/{sid}/transcript` — transcript from S3
   - WS `/api/runs/{id}/ws` — live progress via Redis pub/sub
 
-## Test Coverage
-- 185 unit tests passing
-- 2 e2e integration tests passing (healthy agent + broken agent)
-- All Phases 1-5 components tested
+### Phase 6: React Frontend ✅
+- Vite + React + Tailwind + TanStack Query app, `/api` proxied to backend
+- `NewRun.jsx` — CodeMirror YAML editor (provider/model live in the YAML's `llm_config`) → POST /api/runs
+- `RunDashboard.jsx` — live scenario progress via WebSocket, event timeline, reconnect banner
+- `Report.jsx` — verdict summary, quantitative metrics dashboard, failure analysis, probe chains, per-scenario breakdown with transcript viewer and world_state diffs
+- Components: `MetricsDashboard`, `TranscriptViewer`, `PatchViewer`, `ScenarioCard`, `VerdictSummary`, etc.
+- `Dockerfile.frontend` (node build + nginx) and `nginx.conf`
+- Builds cleanly (`npm run build`, 171 modules)
 
-## Next: Phase 6 — React Frontend
-- CodeMirror YAML editor + provider/model selector
-- Live run dashboard via WebSocket
-- Report viewer with verdict breakdown, transcript viewer, world_state diffs
+### Phase 7: E2E Testing + Polish ✅
+- `tests/e2e/test_full_run.py` — full-stack e2e: POST YAML → task body (orchestrator + real LLM vs. in-process mock agent) → GET status/report/scenarios/transcript → asserts verdicts, metrics, Postgres rows, and S3 blobs. Infra-gated: skips unless Postgres/Redis/MinIO are up and an LLM key is set, so the default suite stays green.
+- `examples/booking_agent.yaml` (stateful WebSocket booking agent) and `examples/faq_agent.yaml` (stateless HTTP FAQ agent) — both validated against the parser
+- `README.md` — architecture overview, Docker Compose quick start, local dev, API reference, testing guide
+
+### Reporting metrics (post-Phase-5 issue) ✅
+- `backend/metrics.py` — six quantitative metrics: task completion, boundary adherence, verification (state integrity) rate, per-constraint violation breakdown, recovery behavior (clean refusal vs. confused/error/leak), conversation efficiency
+- Wired into `reporter.py`; `ScorerAgent` classifies recovery quality; frontend `MetricsDashboard` renders all six
+
+## Test Coverage
+- Unit tests passing (`tests/unit/`)
+- Integration tests: orchestrator against mock agents (`tests/integration/`)
+- E2E: full-stack run, infra-gated (`tests/e2e/test_full_run.py`)
+
+## Status: all 7 phases complete
+Remaining polish is optional (e.g. frontend chunk-splitting to quiet the Vite 500 kB warning).

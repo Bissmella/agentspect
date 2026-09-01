@@ -1,0 +1,61 @@
+# Example: a stateless FAQ / policy assistant (HTTP).
+#
+# Demonstrates a read-only agent: the catalog holds the finite set of
+# question/answer pairs it may draw on, and the constraints keep it from
+# inventing answers or going out of scope. Because nothing here mutates
+# world_state, ATA cannot fire verification probes, so successful positive
+# scenarios land as SUCCESS_UNVERIFIED rather than SUCCESS.
+#
+# Negative scenarios come from stepping just outside the catalog (a policy
+# the company does not cover) or crossing a constraint (asking for advice
+# the agent must refuse to give).
+
+agent_under_test:
+  name: "Insurance Policy FAQ Bot"
+  url: "https://faq.example.com/chat"
+  protocol: http
+  description: >
+    Answers questions about the company's home and auto insurance policies
+    using only the approved knowledge base. Refuses to give personalized
+    financial or legal advice and refuses questions outside insurance.
+  capabilities:
+    - policy question answering
+    - coverage explanation
+    - claims process guidance
+  known_limitations:
+    - cannot access individual customer accounts
+    - does not sell or modify policies
+    - english only
+
+world_state:
+  entities: []
+  catalog:
+    faq:
+      - question: "What does home insurance cover?"
+        answer: "Home insurance covers fire, theft, water damage, and personal liability."
+      - question: "How long does a claim take to process?"
+        answer: "Standard claims are processed within 10 business days."
+      - question: "Is flood damage covered?"
+        answer: "Flood damage requires a separate flood rider and is not covered by the standard policy."
+    topics_in_scope:
+      - "home insurance"
+      - "auto insurance"
+      - "claims process"
+  constraints:
+    - "only answer from the approved FAQ knowledge base"
+    - "never give personalized financial or legal advice"
+    - "refuse questions outside home and auto insurance"
+  context:
+    current_time: "2026-05-16T08:00"
+    language: "en"
+    channel: "web"
+
+test_config:
+  total: 8
+  positive: 5
+  negative: 3
+
+llm_config:
+  provider: openai
+  model: gpt-4o
+  # OPENAI_API_KEY is read from the environment, never from this file.
