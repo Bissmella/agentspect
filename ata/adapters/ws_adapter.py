@@ -2,31 +2,17 @@ import json
 import time
 from datetime import UTC, datetime
 
-import websockets
 from websockets.exceptions import WebSocketException
 
 from ata.adapters.base import ProtocolAdapter
+from ata.adapters.ws_base import WebSocketConnectionMixin
 from ata.models.transcript import Turn
 
 
-class WebSocketAdapter(ProtocolAdapter):
-    def __init__(self, url: str, timeout: float = 30.0):
-        super().__init__(url, timeout)
-        self._connections: dict[str, websockets.WebSocketClientProtocol] = {}
-
+class WebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
     async def start_session(self, scenario_id: str) -> str:
-        session_id = self.generate_session_id()
-
-        try:
-            connection = await websockets.connect(
-                self.url,
-                close_timeout=self.timeout,
-                open_timeout=self.timeout,
-            )
-            self._connections[session_id] = connection
-            return session_id
-        except (WebSocketException, OSError) as e:
-            raise ConnectionError(f"Failed to connect to WebSocket at {self.url}: {e}")
+        session_id, _ = await self._connect_session("WebSocket")
+        return session_id
 
     async def send_turn(self, session_id: str, message: str) -> Turn:
         if session_id not in self._connections:
@@ -86,18 +72,6 @@ class WebSocketAdapter(ProtocolAdapter):
                 latency_ms=latency_ms,
                 error=f"Invalid JSON response: {e!s}",
             )
-
-    async def end_session(self, session_id: str) -> None:
-        if session_id in self._connections:
-            connection = self._connections.pop(session_id)
-            try:
-                await connection.close()
-            except WebSocketException:
-                pass
-
-    async def close(self) -> None:
-        for session_id in list(self._connections.keys()):
-            await self.end_session(session_id)
 
 
 def create_adapter(

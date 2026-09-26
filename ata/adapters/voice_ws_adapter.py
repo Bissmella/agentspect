@@ -24,17 +24,17 @@ import base64
 import json
 import time
 
-import websockets
 from websockets.exceptions import WebSocketException
 
 from ata.adapters.base import ProtocolAdapter
+from ata.adapters.ws_base import WebSocketConnectionMixin
 from ata.models.transcript import Transcript, Turn, VoiceMeta
 from ata.voice.client import VoiceIO
 
 _END_SIGNALS = {"end_of_speech", "end", "eos"}
 
 
-class VoiceWebSocketAdapter(ProtocolAdapter):
+class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
     def __init__(
         self,
         url: str,
@@ -46,21 +46,10 @@ class VoiceWebSocketAdapter(ProtocolAdapter):
         self.voice_io = voice_io
         # Agents that don't greet shouldn't stall the whole timeout.
         self.greeting_timeout = greeting_timeout if greeting_timeout is not None else min(timeout, 5.0)
-        self._connections: dict[str, object] = {}
         self._openings: dict[str, tuple[str, VoiceMeta] | None] = {}
 
-    async def _open_connection(self, url: str):
-        """Isolated so tests can inject a fake connection."""
-        return await websockets.connect(url, open_timeout=self.timeout, close_timeout=self.timeout)
-
     async def start_session(self, scenario_id: str) -> str:
-        session_id = self.generate_session_id()
-        try:
-            connection = await self._open_connection(self.url)
-        except (WebSocketException, OSError) as e:
-            raise ConnectionError(f"Failed to connect to voice WebSocket at {self.url}: {e}")
-
-        self._connections[session_id] = connection
+        session_id, connection = await self._connect_session("voice WebSocket")
 
         # Capture an opening greeting if the agent speaks first (best-effort).
         try:
@@ -196,13 +185,4 @@ class VoiceWebSocketAdapter(ProtocolAdapter):
 
     async def end_session(self, session_id: str) -> None:
         self._openings.pop(session_id, None)
-        connection = self._connections.pop(session_id, None)
-        if connection is not None:
-            try:
-                await connection.close()
-            except WebSocketException:
-                pass
-
-    async def close(self) -> None:
-        for session_id in list(self._connections.keys()):
-            await self.end_session(session_id)
+        await super().end_session(session_id)
