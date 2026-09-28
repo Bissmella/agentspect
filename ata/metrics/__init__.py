@@ -10,6 +10,31 @@ Two ways to use this package:
 """
 
 from ata.metrics.base import Metric, MetricContext
+
+# Importing the built-in classes runs ata.metrics.builtin, whose @register
+# decorators populate the default registry.
+from ata.metrics.builtin import (
+    BoundaryAdherence,
+    ConstraintViolations,
+    ConversationEfficiency,
+    GreetingRateMetric,
+    GreetingRateResult,
+    IntelligibilityMetric,
+    IntelligibilityResult,
+    LatencyMetric,
+    LatencyResult,
+    NoResponseRateMetric,
+    NoResponseRateResult,
+    PrematureDisconnectMetric,
+    PrematureDisconnectResult,
+    RecoveryBehavior,
+    TaskCompletion,
+    TimeToFirstAudioMetric,
+    TimeToFirstAudioResult,
+    TurnErrorRateMetric,
+    TurnErrorRateResult,
+    VerificationRate,
+)
 from ata.metrics.core import (
     BoundaryAdherenceMetric,
     ConstraintViolation,
@@ -28,23 +53,6 @@ from ata.metrics.core import (
 )
 from ata.metrics.engine import MetricEngine, compute_metrics
 from ata.metrics.registry import MetricRegistry, register, registry
-
-# Importing the built-in classes runs ata.metrics.builtin, whose @register
-# decorators populate the default registry.
-from ata.metrics.builtin import (
-    BoundaryAdherence,
-    ConstraintViolations,
-    ConversationEfficiency,
-    LatencyMetric,
-    LatencyResult,
-    RecoveryBehavior,
-    TaskCompletion,
-    TimeToFirstAudioMetric,
-    TimeToFirstAudioResult,
-    TurnErrorRateMetric,
-    TurnErrorRateResult,
-    VerificationRate,
-)
 
 __all__ = [
     # extensible system
@@ -65,10 +73,18 @@ __all__ = [
     "LatencyMetric",
     "TurnErrorRateMetric",
     "TimeToFirstAudioMetric",
+    "NoResponseRateMetric",
+    "GreetingRateMetric",
+    "PrematureDisconnectMetric",
+    "IntelligibilityMetric",
     # result models
     "LatencyResult",
     "TurnErrorRateResult",
     "TimeToFirstAudioResult",
+    "NoResponseRateResult",
+    "GreetingRateResult",
+    "PrematureDisconnectResult",
+    "IntelligibilityResult",
     "QuantitativeMetrics",
     "TaskCompletionMetric",
     "BoundaryAdherenceMetric",

@@ -5,7 +5,7 @@ from ata.adapters.base import ProtocolAdapter
 from ata.agents.state import ATAGraphState
 from ata.llm.client import LLMClient
 from ata.models.suite import Scenario, ScenarioVerdict, Verdict
-from ata.models.transcript import Transcript
+from ata.models.transcript import AgentFailure, Transcript
 from ata.models.world_state import WorldState
 from ata.services.placeholder import PlaceholderResolutionError, resolve_placeholders
 
@@ -142,14 +142,31 @@ Return ONLY the message you want to send. No explanations or quotes.""",
                 user_message = response.content.strip() or user_message
 
             turn = await adapter.send_turn(session_id, user_message)
+
+            # A blank response from any adapter is a behavioral no-response, unless
+            # the adapter already classified the turn (framework error or a more
+            # specific agent failure). This makes no-response detection general.
+            if (
+                turn.error is None
+                and turn.agent_failure is None
+                and not turn.agent_response.strip()
+            ):
+                turn.agent_failure = AgentFailure.NO_RESPONSE
+
             transcript.add_turn(turn)
 
+            # Framework/transport fault on ATA's side: cannot complete the run.
             if turn.error:
                 verdict = ScenarioVerdict(
                     scenario_id=scenario.id,
                     verdict=Verdict.ERROR,
                     reason=turn.error,
                 )
+                break
+
+            # Agent behavioral failure: stop the conversation but let the scorer
+            # score it as a failed run rather than discarding it as an ERROR.
+            if turn.agent_failure is not None:
                 break
 
             conversation_history.append({"role": "user", "content": user_message})

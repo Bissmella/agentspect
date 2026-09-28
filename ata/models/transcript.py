@@ -1,10 +1,23 @@
 from datetime import UTC, datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+class AgentFailure(str, Enum):
+    """A behavioral failure of the agent under test, observed over the transport.
+    agents' falut not framework error.
+    Names are transport-neutral so a future telephony adapter reuses them as-is.
+    """
+
+    NO_RESPONSE = "no_response"          # agent stayed silent / returned nothing
+    DISCONNECTED = "disconnected"        # agent dropped the conversation early
+    UNINTELLIGIBLE = "unintelligible"    # voice: agent spoke but could not be transcribed
+    CALLER_REJECTED = "caller_rejected"  # reserved: agent refused the caller (telephony, platform-side)
 
 
 class VoiceMeta(BaseModel):
@@ -32,7 +45,8 @@ class Turn(BaseModel):
     agent_response: str
     timestamp: datetime = Field(default_factory=_utcnow)
     latency_ms: int = 0
-    error: str | None = None
+    error: str | None = None  # framework/transport fault (ATA's side) -> ERROR verdict
+    agent_failure: AgentFailure | None = None  # agent's behavioral fault -> scored as a failed run
     voice: VoiceMeta | None = None
 
 
@@ -62,4 +76,12 @@ class Transcript(BaseModel):
         for turn in reversed(self.turns):
             if turn.error:
                 return turn.error
+        return None
+
+    @property
+    def agent_failure(self) -> AgentFailure | None:
+        """The last behavioral failure the agent exhibited, if any."""
+        for turn in reversed(self.turns):
+            if turn.agent_failure is not None:
+                return turn.agent_failure
         return None

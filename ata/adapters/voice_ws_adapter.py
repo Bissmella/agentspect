@@ -28,7 +28,7 @@ from websockets.exceptions import WebSocketException
 
 from ata.adapters.base import ProtocolAdapter
 from ata.adapters.ws_base import WebSocketConnectionMixin
-from ata.models.transcript import Transcript, Turn, VoiceMeta
+from ata.models.transcript import AgentFailure, Transcript, Turn, VoiceMeta
 from ata.voice.client import VoiceIO
 
 _END_SIGNALS = {"end_of_speech", "end", "eos"}
@@ -103,16 +103,28 @@ class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
             audio_in, ttfa_ms, timed_out = await self._collect_agent_audio(connection, self.timeout)
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
+            # The agent said nothing: a behavioral no-response, not a framework error.
             if not audio_in:
                 return Turn(
                     user_message=message,
                     agent_response="",
                     latency_ms=latency_ms,
-                    error="TIMEOUT" if timed_out else "No audio received from agent",
+                    agent_failure=AgentFailure.NO_RESPONSE,
                     voice=self._voice_meta(ttfa_ms, None),
                 )
 
             result = await self.voice_io.transcribe(audio_in)
+
+            # The agent spoke but we could not make out any words.
+            if not result.text.strip():
+                return Turn(
+                    user_message=message,
+                    agent_response="",
+                    latency_ms=latency_ms,
+                    agent_failure=AgentFailure.UNINTELLIGIBLE,
+                    voice=self._voice_meta(ttfa_ms, result.confidence),
+                )
+
             return Turn(
                 user_message=message,
                 agent_response=result.text,
@@ -120,13 +132,15 @@ class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
                 voice=self._voice_meta(ttfa_ms, result.confidence),
             )
 
-        except WebSocketException as e:
+        except WebSocketException:
+            # The call dropped mid-turn: the agent hung up on us (behavioral),
+            # not a framework fault — establishing the connection already succeeded.
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             return Turn(
                 user_message=message,
                 agent_response="",
                 latency_ms=latency_ms,
-                error=f"WebSocket error: {e}",
+                agent_failure=AgentFailure.DISCONNECTED,
             )
         except Exception as e:
             latency_ms = int((time.perf_counter() - start_time) * 1000)

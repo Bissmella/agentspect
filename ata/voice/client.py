@@ -2,7 +2,7 @@
 
 Thin voice needs only batch request/responseو synthesize text to audio, and
 transcribe audio to text.
-Streaming / realtime / VAD are deferred to the thick phase and the Pipecat bridge.
+Streaming / realtime / VAD are deferred to the Pipecat bridge.
 
 STT and TTS are separate abstractions so a run can mix providers (e.g. one for
 speech-to-text, another for text-to-speech) or use a provider that only does one.

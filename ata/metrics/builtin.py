@@ -20,10 +20,9 @@ from ata.metrics.core import (
     compute_verification_rate,
 )
 from ata.metrics.registry import register
-from ata.models.suite import Scenario
-from ata.models.transcript import Turn
+from ata.models.suite import Scenario, ScenarioVerdict
+from ata.models.transcript import AgentFailure, Transcript, Turn
 
-# ── The six aggregate metrics (wrap the existing pure functions) ──────────────
 
 @register
 class TaskCompletion(Metric):
@@ -189,4 +188,163 @@ class TimeToFirstAudioMetric(Metric):
             avg_ms=sum(s) / n if n else None,
             p50_ms=_percentile(s, 50),
             p95_ms=_percentile(s, 95),
+        )
+
+
+#general agent failure metrics
+
+class NoResponseRateResult(BaseModel):
+    total_turns: int
+    no_response_turns: int
+    rate: float
+
+
+@register
+class NoResponseRateMetric(Metric):
+    """Fraction of turns where the agent produced no response at all.
+
+    General: a text agent returning empty and a voice agent staying silent both
+    surface as ``AgentFailure.NO_RESPONSE``.
+    """
+
+    name = "no_response_rate"
+    description = "Fraction of turns the agent gave no response."
+
+    def __init__(self) -> None:
+        self._total = 0
+        self._no_response = 0
+
+    def on_turn(self, ctx: MetricContext, scenario: Scenario, turn: Turn, index: int) -> None:
+        self._total += 1
+        if turn.agent_failure == AgentFailure.NO_RESPONSE:
+            self._no_response += 1
+
+    def compute(self, ctx: MetricContext) -> NoResponseRateResult:
+        return NoResponseRateResult(
+            total_turns=self._total,
+            no_response_turns=self._no_response,
+            rate=self._no_response / self._total if self._total else 0.0,
+        )
+
+
+class GreetingRateResult(BaseModel):
+    scenarios: int
+    greeted: int
+    rate: float
+
+
+@register
+class GreetingRateMetric(Metric):
+    """Fraction of conversations where the agent spoke first (greeted).
+
+    General: reads ``Transcript.opening_utterance``, which any adapter that
+    captures an agent-opening message populates (voice does today).
+    """
+
+    name = "greeting_rate"
+    description = "Fraction of conversations the agent opened with a greeting."
+
+    def __init__(self) -> None:
+        self._scenarios = 0
+        self._greeted = 0
+
+    def on_scenario_end(
+        self,
+        ctx: MetricContext,
+        scenario: Scenario,
+        transcript: Transcript | None,
+        verdict: ScenarioVerdict | None,
+    ) -> None:
+        if transcript is None:
+            return
+        self._scenarios += 1
+        if transcript.opening_utterance and transcript.opening_utterance.strip():
+            self._greeted += 1
+
+    def compute(self, ctx: MetricContext) -> GreetingRateResult:
+        return GreetingRateResult(
+            scenarios=self._scenarios,
+            greeted=self._greeted,
+            rate=self._greeted / self._scenarios if self._scenarios else 0.0,
+        )
+
+
+class PrematureDisconnectResult(BaseModel):
+    scenarios: int
+    disconnected: int
+    rate: float
+
+
+@register
+class PrematureDisconnectMetric(Metric):
+    """Fraction of conversations the agent dropped before they concluded.
+
+    General: reads ``AgentFailure.DISCONNECTED`` (a voice agent hanging up, or a
+    text agent dropping its session mid-conversation).
+    """
+
+    name = "premature_disconnect_rate"
+    description = "Fraction of conversations the agent ended abruptly."
+
+    def __init__(self) -> None:
+        self._scenarios = 0
+        self._disconnected = 0
+
+    def on_scenario_end(
+        self,
+        ctx: MetricContext,
+        scenario: Scenario,
+        transcript: Transcript | None,
+        verdict: ScenarioVerdict | None,
+    ) -> None:
+        if transcript is None:
+            return
+        self._scenarios += 1
+        if transcript.agent_failure == AgentFailure.DISCONNECTED:
+            self._disconnected += 1
+
+    def compute(self, ctx: MetricContext) -> PrematureDisconnectResult:
+        return PrematureDisconnectResult(
+            scenarios=self._scenarios,
+            disconnected=self._disconnected,
+            rate=self._disconnected / self._scenarios if self._scenarios else 0.0,
+        )
+
+
+#metrics specific to voice agents
+
+class IntelligibilityResult(BaseModel):
+    turns_with_confidence: int
+    avg_confidence: float | None
+    unintelligible_turns: int
+
+
+@register
+class IntelligibilityMetric(Metric):
+    """How intelligible the agent's speech was.
+
+    Averages ``VoiceMeta.stt_confidence`` where the provider reports it, and
+    counts turns ATA could not transcribe at all (``AgentFailure.UNINTELLIGIBLE``)
+    — a proxy for broken or garbled TTS output.
+    """
+
+    name = "intelligibility"
+    description = "Agent speech intelligibility (STT confidence + unintelligible turns)."
+
+    def __init__(self) -> None:
+        self._confidences: list[float] = []
+        self._unintelligible = 0
+
+    def on_turn(self, ctx: MetricContext, scenario: Scenario, turn: Turn, index: int) -> None:
+        if turn.agent_failure == AgentFailure.UNINTELLIGIBLE:
+            self._unintelligible += 1
+        if turn.voice and turn.voice.stt_confidence is not None:
+            self._confidences.append(turn.voice.stt_confidence)
+
+    def compute(self, ctx: MetricContext) -> IntelligibilityResult:
+        n = len(self._confidences)
+        return IntelligibilityResult(
+            turns_with_confidence=n,
+            avg_confidence=sum(self._confidences) / n if n else None,
+            unintelligible_turns=self._unintelligible,
         )
