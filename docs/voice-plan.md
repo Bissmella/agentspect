@@ -25,8 +25,9 @@
    pipeline (STT→LLM→TTS) or a speech-native model (Moshi / realtime). ATA neither
    knows nor cares — audio in, audio out.
 2. **Thin first.** Thin = STT (agent audio → text) + TTS (user text → audio) around
-   the *existing text core*. The UserSimulator, ScenarioGenerator, Scorer,
-   world_state and verdict flow stay text and untouched.
+   the *existing text core*. ScenarioGenerator, world_state and the verdict flow
+   stay untouched. (Phase 5 later extended the Scorer/UserSimulator for
+   agent-failure handling — see Status; still transport-agnostic.)
 3. **Thin must capture voice telemetry.** A metric can only read what's on the
    `Turn`; audio is ephemeral and non-retrofittable. So the thin adapter records
    timing/audio metadata onto each `Turn` even though it computes nothing from it
