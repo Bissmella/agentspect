@@ -4,6 +4,7 @@ import base64
 import json
 
 import pytest
+from ata.adapters.base import ProtocolAdapter
 from ata.adapters.voice_ws_adapter import VoiceWebSocketAdapter
 from ata.adapters.ws_adapter import create_adapter
 from ata.metrics.builtin import (
@@ -177,14 +178,15 @@ async def test_adapter_send_turn_roundtrips_and_records_voice_meta():
     await adapter.close()
 
 
-async def test_adapter_silence_is_no_response_not_error():
-    # greeting ends, then the agent goes silent → behavioral NO_RESPONSE, not ERROR.
+async def test_adapter_silence_reports_blank_without_deciding_failure():
+    # The agent goes silent. The adapter must NOT decide this is a failure (it lacks
+    # conversational context); it returns a blank response and no agent_failure. (#5)
     conn = FakeConnection([_EOS], hang=True)
     adapter = _adapter_with(conn, timeout=0.2)
     session_id = await adapter.start_session("s1")
     turn = await adapter.send_turn(session_id, "hello?")
     assert turn.error is None
-    assert turn.agent_failure == AgentFailure.NO_RESPONSE
+    assert turn.agent_failure is None
     assert turn.agent_response == ""
     await adapter.close()
 
@@ -200,15 +202,17 @@ async def test_adapter_midcall_disconnect_is_agent_failure():
     await adapter.close()
 
 
-async def test_adapter_unintelligible_when_transcription_empty():
-    # greeting ends, then the agent emits audio that transcribes to whitespace.
+async def test_adapter_empty_transcription_is_blank_not_unintelligible():
+    # Audio that transcribes to whitespace is NOT claimed UNINTELLIGIBLE in batch STT
+    # (unreliable); it is a blank response with no agent_failure. (#5)
     blank_audio = _audio_frame("   ")
     conn = FakeConnection([_EOS, blank_audio, _EOS])
     adapter = _adapter_with(conn)
     session_id = await adapter.start_session("s1")
     turn = await adapter.send_turn(session_id, "hello")
     assert turn.error is None
-    assert turn.agent_failure == AgentFailure.UNINTELLIGIBLE
+    assert turn.agent_failure is None
+    assert not turn.agent_response.strip()
     assert turn.voice is not None
     await adapter.close()
 
@@ -380,3 +384,76 @@ async def test_scorer_agent_failure_forces_failure_despite_passing_assertions():
     verdict = out["verdicts"]["s1"]
     assert verdict.verdict == Verdict.FAILURE       # not ERROR, not SUCCESS
     assert "no_response" in verdict.reason
+
+
+# ── Turn-position gate: blank/disconnect only fail when a reply was expected (#5, #6)
+
+class _ScriptedAdapter(ProtocolAdapter):
+    """Adapter that returns pre-scripted (agent_response, agent_failure) per turn."""
+
+    def __init__(self, script):
+        super().__init__(url="scripted://x")
+        self._script = list(script)
+        self._i = 0
+
+    async def start_session(self, scenario_id: str) -> str:
+        return "sess"
+
+    async def send_turn(self, session_id: str, message: str) -> Turn:
+        agent_response, agent_failure = self._script[self._i]
+        self._i += 1
+        return Turn(user_message=message, agent_response=agent_response, agent_failure=agent_failure)
+
+    async def end_session(self, session_id: str) -> None:
+        pass
+
+
+def _mk_ws():
+    from ata.models.world_state import WorldState
+
+    return WorldState({"entities": [], "catalog": {}, "constraints": [], "context": {}})
+
+
+async def test_blank_midconversation_is_no_response():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from ata.agents.user_simulator import _run_single_scenario
+
+    scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["one", "two"])
+    adapter = _ScriptedAdapter([("", None)])  # blank on turn 1 → should stop before turn 2
+    llm = MagicMock()
+    llm.chat = AsyncMock()
+
+    transcript, verdict = await _run_single_scenario(scenario, _mk_ws(), adapter, llm)
+
+    assert transcript.turns[0].agent_failure == AgentFailure.NO_RESPONSE
+    assert verdict is None  # not ERROR — the scorer will score it
+    llm.chat.assert_not_called()  # stopped before generating the second turn
+
+
+async def test_blank_on_final_turn_is_not_a_failure():
+    from unittest.mock import MagicMock
+
+    from ata.agents.user_simulator import _run_single_scenario
+
+    scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["bye"])
+    adapter = _ScriptedAdapter([("", None)])  # blank on the only/last turn → acceptable end
+
+    transcript, verdict = await _run_single_scenario(scenario, _mk_ws(), adapter, MagicMock())
+
+    assert transcript.turns[0].agent_failure is None
+    assert verdict is None
+
+
+async def test_disconnect_on_final_turn_is_cleared():
+    from unittest.mock import MagicMock
+
+    from ata.agents.user_simulator import _run_single_scenario
+
+    scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["bye"])
+    adapter = _ScriptedAdapter([("", AgentFailure.DISCONNECTED)])  # agent hangs up after goodbye
+
+    transcript, verdict = await _run_single_scenario(scenario, _mk_ws(), adapter, MagicMock())
+
+    assert transcript.turns[0].agent_failure is None  # gated away on the final turn
+    assert verdict is None

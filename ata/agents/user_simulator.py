@@ -141,17 +141,16 @@ Return ONLY the message you want to send. No explanations or quotes.""",
                 response = await llm_client.chat(adapt_messages, temperature=0.3)
                 user_message = response.content.strip() or user_message
 
+            is_last_turn = i == len(scenario.turns) - 1
             turn = await adapter.send_turn(session_id, user_message)
 
-            # A blank response from any adapter is a behavioral no-response, unless
-            # the adapter already classified the turn (framework error or a more
-            # specific agent failure). This makes no-response detection general.
-            if (
-                turn.error is None
-                and turn.agent_failure is None
-                and not turn.agent_response.strip()
-            ):
+            
+            blank = not turn.agent_response.strip()
+            if turn.error is None and turn.agent_failure is None and blank and not is_last_turn:
                 turn.agent_failure = AgentFailure.NO_RESPONSE
+
+            if turn.agent_failure == AgentFailure.DISCONNECTED and is_last_turn:
+                turn.agent_failure = None
 
             transcript.add_turn(turn)
 

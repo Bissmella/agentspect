@@ -16,7 +16,7 @@ class AgentFailure(str, Enum):
 
     NO_RESPONSE = "no_response"          # agent stayed silent / returned nothing
     DISCONNECTED = "disconnected"        # agent dropped the conversation early
-    UNINTELLIGIBLE = "unintelligible"    # voice: agent spoke but could not be transcribed
+    UNINTELLIGIBLE = "unintelligible"    # reserved: voice speech below an STT-confidence threshold (needs a provider that reports confidence)
     CALLER_REJECTED = "caller_rejected"  # reserved: agent refused the caller (telephony, platform-side)
 
 
