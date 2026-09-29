@@ -15,7 +15,7 @@
 - ✅ **Phase 2** — `VoiceWebSocketAdapter`: greeting capture, TTS→send→collect→STT round-trip, `end_of_speech`/timeout endpointing, `VoiceMeta` telemetry.
 - ✅ **Phase 3** — YAML `voice` block + `voice_websocket` protocol, `create_adapter` routing, orchestrator wiring, `ata[pipecat]` extra, `examples/voice_agent.yaml` + `examples/voice_echo_agent.py` toy target.
 - ✅ **Phase 4** — `TimeToFirstAudioMetric` proof metric + `tests/unit/test_voice.py` (13 tests, full suite 243 green).
-- ⏭️ **Follow-ups:** finish the Pipecat bridge (batch↔frame + provider auto-construction); the three open questions below; then the thick metrics.
+- ⏭️ **Follow-ups:** finish the Pipecat bridge (batch↔frame + provider auto-construction); the three open questions below; then the thick metrics — planned in `thick-plan.md`.
 
 ---
 
