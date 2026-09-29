@@ -416,7 +416,10 @@ async def scorer_node(
                 "reasoning": result.reasoning,
             })
 
-        run_success = _determine_run_outcome(results)
+        # A behavioral agent failure (silence, hangup, unintelligible) means the
+        # run did not succeed regardless of assertions — the agent misbehaved.
+        agent_failure = transcript.agent_failure
+        run_success = _determine_run_outcome(results) and agent_failure is None
 
         if scenario.depends_on and scenario.depends_on_type:
             parent_id = scenario.depends_on
@@ -447,11 +450,17 @@ async def scorer_node(
             except Exception:
                 recovery_quality = None
 
+        reason = (
+            f"Run {'succeeded' if run_success else 'failed'}, "
+            f"{sum(1 for r in results if r.satisfied)}/{len(results)} assertions satisfied"
+        )
+        if agent_failure is not None:
+            reason += f"; agent failure: {agent_failure.value}"
+
         verdicts[scenario.id] = ScenarioVerdict(
             scenario_id=scenario.id,
             verdict=verdict,
-            reason=f"Run {'succeeded' if run_success else 'failed'}, "
-                   f"{sum(1 for r in results if r.satisfied)}/{len(results)} assertions satisfied",
+            reason=reason,
             assertion_results=assertion_results,
             recovery_quality=recovery_quality,
         )

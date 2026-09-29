@@ -1,0 +1,67 @@
+# Voice-agent example — ATA drives the conversation over the voice channel.
+#
+# ATA synthesizes the user's turns to speech, sends them to the agent over a
+# WebSocket, transcribes the agent's spoken replies, and evaluates them exactly
+# like a text run — plus voice telemetry (see the `voice` block).
+#
+# To try it against the bundled toy target:
+#   1. export OPENAI_API_KEY=...          # STT/TTS use the OpenAI reference provider
+#   2. python examples/voice_echo_agent.py    # serves ws://localhost:8765
+#   3. run this suite with the ATA engine
+#
+# The long tail of STT/TTS providers is reachable via `pip install "ata[pipecat]"`.
+
+agent_under_test:
+  name: "Voice Booking Assistant"
+  url: "ws://localhost:8765"
+  protocol: voice_websocket
+  description: >
+    Books appointments for registered customers over the phone.
+    Greets the caller, identifies them by phone number, offers available slots.
+  capabilities:
+    - appointment booking
+    - customer lookup
+  known_limitations:
+    - does not handle rescheduling
+    - english only
+
+world_state:
+  entities:
+    - id: customer_1
+      phone: "+33612345678"
+      name: "Isabelle Martin"
+      verified: true
+  catalog:
+    available_slots:
+      - "2026-05-20T10:00"
+      - "2026-05-20T14:00"
+  constraints:
+    - "only verified entities can book"
+    - "slots must be within 09:00-18:00"
+  context:
+    current_time: "2026-05-16T08:00"
+    language: "en"
+    channel: "voice"
+
+test_config:
+  total: 6
+  positive: 4
+  negative: 2
+
+llm_config:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+
+# Voice channel configuration. STT/TTS keys come from the environment, never here.
+voice:
+  stt:
+    provider: openai        # reference provider; register your own or use ata[pipecat]
+    model: whisper-1
+  tts:
+    provider: openai
+    model: gpt-4o-mini-tts
+    voice: alloy
+    language: en
+  endpointing:
+    mode: signal            # honour the agent's end_of_speech frame; timeout fallback
+    silence_ms: 700

@@ -5,7 +5,7 @@ from ata.adapters.base import ProtocolAdapter
 from ata.agents.state import ATAGraphState
 from ata.llm.client import LLMClient
 from ata.models.suite import Scenario, ScenarioVerdict, Verdict
-from ata.models.transcript import Transcript
+from ata.models.transcript import AgentFailure, Transcript
 from ata.models.world_state import WorldState
 from ata.services.placeholder import PlaceholderResolutionError, resolve_placeholders
 
@@ -141,15 +141,31 @@ Return ONLY the message you want to send. No explanations or quotes.""",
                 response = await llm_client.chat(adapt_messages, temperature=0.3)
                 user_message = response.content.strip() or user_message
 
+            is_last_turn = i == len(scenario.turns) - 1
             turn = await adapter.send_turn(session_id, user_message)
+
+            
+            blank = not turn.agent_response.strip()
+            if turn.error is None and turn.agent_failure is None and blank and not is_last_turn:
+                turn.agent_failure = AgentFailure.NO_RESPONSE
+
+            if turn.agent_failure == AgentFailure.DISCONNECTED and is_last_turn:
+                turn.agent_failure = None
+
             transcript.add_turn(turn)
 
+            # Framework/transport fault on ATA's side: cannot complete the run.
             if turn.error:
                 verdict = ScenarioVerdict(
                     scenario_id=scenario.id,
                     verdict=Verdict.ERROR,
                     reason=turn.error,
                 )
+                break
+
+            # Agent behavioral failure: stop the conversation but let the scorer
+            # score it as a failed run rather than discarding it as an ERROR.
+            if turn.agent_failure is not None:
                 break
 
             conversation_history.append({"role": "user", "content": user_message})

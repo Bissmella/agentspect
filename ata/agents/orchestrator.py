@@ -262,6 +262,7 @@ class OrchestratorAgent:
                 self._adapter = create_adapter(
                     protocol=agent_config.protocol,
                     url=agent_config.url,
+                    voice=yaml_input.voice,
                 )
         except Exception as e:
             self._llm_client = None

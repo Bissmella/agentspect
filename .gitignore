@@ -30,4 +30,5 @@ Thumbs.db
 
 # Private working notes / local Claude Code config
 docs/roadmap.md
+docs/issues.md
 .claude/settings.local.json

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
@@ -7,12 +8,46 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+class AgentFailure(str, Enum):
+    """A behavioral failure of the agent under test, observed over the transport.
+    agents' falut not framework error.
+    Names are transport-neutral so a future telephony adapter reuses them as-is.
+    """
+
+    NO_RESPONSE = "no_response"          # agent stayed silent / returned nothing
+    DISCONNECTED = "disconnected"        # agent dropped the conversation early
+    UNINTELLIGIBLE = "unintelligible"    # reserved: voice speech below an STT-confidence threshold (needs a provider that reports confidence)
+    CALLER_REJECTED = "caller_rejected"  # reserved: agent refused the caller (telephony, platform-side)
+
+
+class VoiceMeta(BaseModel):
+    """Per-turn voice telemetry, captured by voice adapters.
+
+    Every field is optional: text adapters never set it.
+    Used for voice-based metrics.
+    """
+
+    time_to_first_audio_ms: int | None = None  # start of agent speech, not round-trip
+    agent_speech_ms: int | None = None
+    user_speech_ms: int | None = None
+    silence_gaps_ms: list[int] = Field(default_factory=list)
+    interrupted: bool | None = None  # reserved for barge-in orchestration
+    dtmf: str | None = None
+    stt_confidence: float | None = None
+    voice: str | None = None  # the TTS voice ATA spoke with
+    accent: str | None = None
+    language: str | None = None
+    audio_ref: str | None = None  # blob key for recorded audio, if stored
+
+
 class Turn(BaseModel):
     user_message: str
     agent_response: str
     timestamp: datetime = Field(default_factory=_utcnow)
     latency_ms: int = 0
-    error: str | None = None
+    error: str | None = None  # framework/transport fault (ATA's side) -> ERROR verdict
+    agent_failure: AgentFailure | None = None  # agent's behavioral fault -> scored as a failed run
+    voice: VoiceMeta | None = None
 
 
 class Transcript(BaseModel):
@@ -22,6 +57,9 @@ class Transcript(BaseModel):
     started_at: datetime = Field(default_factory=_utcnow)
     ended_at: datetime | None = None
     protocol: str
+    # Voice agents speak first; captured here so turn counts stay clean.
+    opening_utterance: str | None = None
+    opening_voice: VoiceMeta | None = None
 
     def add_turn(self, turn: Turn) -> None:
         self.turns.append(turn)
@@ -38,4 +76,12 @@ class Transcript(BaseModel):
         for turn in reversed(self.turns):
             if turn.error:
                 return turn.error
+        return None
+
+    @property
+    def agent_failure(self) -> AgentFailure | None:
+        """The last behavioral failure the agent exhibited, if any."""
+        for turn in reversed(self.turns):
+            if turn.agent_failure is not None:
+                return turn.agent_failure
         return None

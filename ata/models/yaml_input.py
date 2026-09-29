@@ -6,14 +6,14 @@ from pydantic import BaseModel, Field, model_validator
 class AgentUnderTest(BaseModel):
     name: str
     url: str | None = None
-    protocol: str = Field(pattern=r"^(http|websocket|callable)$")
+    protocol: str = Field(pattern=r"^(http|websocket|callable|voice_websocket)$")
     description: str
     capabilities: list[str] = Field(default_factory=list)
     known_limitations: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _require_url_for_network_protocols(self):
-        if self.protocol in ("http", "websocket") and not self.url:
+        if self.protocol in ("http", "websocket", "voice_websocket") and not self.url:
             raise ValueError(f"url is required for protocol '{self.protocol}'")
         return self
 
@@ -34,6 +34,36 @@ class TestConfig(BaseModel):
 class LLMConfig(BaseModel):
     provider: str = Field(pattern=r"^(anthropic|openai|google|openrouter|ollama)$")
     model: str
+
+
+class STTSpec(BaseModel):
+    provider: str = "openai"
+    model: str | None = None
+
+
+class TTSSpec(BaseModel):
+    provider: str = "openai"
+    model: str | None = None
+    voice: str | None = None
+    language: str | None = None
+    accent: str | None = None
+
+
+class EndpointingSpec(BaseModel):
+    """How ATA decides the agent finished speaking.
+    mode: signal|vad  signal uses end_of_speech control frame
+    and vad uses Pipcat's VAD when the extra is installed.
+    silence_ms: fallback timeout.
+    """
+
+    mode: str = Field(default="signal", pattern=r"^(signal|vad)$")
+    silence_ms: int = Field(default=700, ge=0)
+
+
+class VoiceConfig(BaseModel):
+    stt: STTSpec = Field(default_factory=STTSpec)
+    tts: TTSSpec = Field(default_factory=TTSSpec)
+    endpointing: EndpointingSpec = Field(default_factory=EndpointingSpec)
 
 
 class AssetSpec(BaseModel):
@@ -61,3 +91,11 @@ class YAMLInput(BaseModel):
     test_config: TestConfig
     llm_config: LLMConfig
     assets: list[AssetSpec] = Field(default_factory=list)
+    voice: VoiceConfig | None = None
+
+    @model_validator(mode="after")
+    def _require_voice_for_voice_protocol(self):
+        if self.agent_under_test.protocol == "voice_websocket" and self.voice is None:
+            # A default voice config (OpenAI STT/TTS) is enough to run.
+            self.voice = VoiceConfig()
+        return self
