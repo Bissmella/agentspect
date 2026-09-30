@@ -6,6 +6,20 @@
 
 ---
 
+## Status (branch `voice_channel_metrics`)
+
+- ✅ **Stage A** — streaming capture (`_AudioCapture` timestamps → `agent_speech_ms`,
+  `silence_gaps_ms`) + metrics `dead_air`, `agent_speech_duration`. No model change
+  (reserved `VoiceMeta` fields), no Pipecat.
+  - `turn_taking_latency` was **not** added as a separate metric: in the single-blob
+    thin send it is identical to the existing `time_to_first_audio` metric. A
+    genuinely precise turn-taking gap (VAD both sides) is Stage B.
+- ⏭️ **Stage B** — see below. Recommended order: **B3 schema first** (additive,
+  Pipecat-independent), then **verify Pipecat's VAD/interruption API**, then B2/B1
+  (event model + runtime designed against that API), then B4.
+
+---
+
 ## Core realization
 
 For thin, "thick = just add metrics" held because thin already captured the
@@ -50,13 +64,12 @@ populate, per turn:
 No Pipecat needed here — it's bookkeeping over frames we already receive. Keep the
 loop structured so Stage B can hang injection events off the same timeline.
 
-**Metrics** (`@register`ed, read `VoiceMeta`):
-- `turn_taking_latency` — end-of-user → start-of-agent, percentiles
+**Metrics** (`@register`ed, read `VoiceMeta`) — shipped:
 - `dead_air` — count / max / total of mid-response silence gaps
 - `agent_speech_duration` — how long the agent talks per turn
+- turn-taking latency: served by the existing `time_to_first_audio` metric (see Status).
 
-**Touches:** `voice_ws_adapter.py` (timestamped collect), `metrics/builtin.py`
-(three metrics), tests. That's it.
+**Touches:** `voice_ws_adapter.py` (timestamped collect), `metrics/builtin.py`, tests.
 
 ---
 

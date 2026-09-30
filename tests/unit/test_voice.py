@@ -8,6 +8,8 @@ from ata.adapters.base import ProtocolAdapter
 from ata.adapters.voice_ws_adapter import VoiceWebSocketAdapter
 from ata.adapters.ws_adapter import create_adapter
 from ata.metrics.builtin import (
+    AgentSpeechDurationMetric,
+    DeadAirMetric,
     GreetingRateMetric,
     IntelligibilityMetric,
     NoResponseRateMetric,
@@ -457,3 +459,88 @@ async def test_disconnect_on_final_turn_is_cleared():
 
     assert transcript.turns[0].agent_failure is None  # gated away on the final turn
     assert verdict is None
+
+
+# ── Stage A: streaming capture + observational metrics ─────────────────────────
+
+async def test_adapter_captures_speech_span_and_gaps():
+    # greeting (no audio), then three agent audio frames + end. With the dead-air
+    # threshold at 0, every inter-frame gap is recorded → 2 gaps for 3 frames.
+    af = _audio_frame("hi")
+    conn = FakeConnection([_EOS, af, af, af, _EOS])
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=_fake_voice_io(), timeout=5.0, dead_air_gap_ms=0
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    assert turn.voice is not None
+    assert turn.voice.agent_speech_ms is not None
+    assert len(turn.voice.silence_gaps_ms) == 2
+    await adapter.close()
+
+
+def test_dead_air_metric():
+    t = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
+    t.add_turn(Turn(user_message="a", agent_response="b", voice=VoiceMeta(silence_gaps_ms=[600, 1200])))
+    t.add_turn(Turn(user_message="c", agent_response="d", voice=VoiceMeta(silence_gaps_ms=[])))
+    result = _run_metric(DeadAirMetric(), t)
+    assert result.turns_with_gaps == 1
+    assert result.total_gaps == 2
+    assert result.max_gap_ms == 1200
+    assert result.total_dead_air_ms == 1800
+
+
+def test_agent_speech_duration_metric():
+    t = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
+    t.add_turn(Turn(user_message="a", agent_response="b", voice=VoiceMeta(agent_speech_ms=1000)))
+    t.add_turn(Turn(user_message="c", agent_response="d", voice=VoiceMeta(agent_speech_ms=3000)))
+    result = _run_metric(AgentSpeechDurationMetric(), t)
+    assert result.turns == 2
+    assert result.avg_ms == 2000.0
+    assert result.total_ms == 4000
+
+
+# ── Stage B (B3): timed voice-action scenario schema ───────────────────────────
+
+def test_scenario_defaults_to_no_voice_actions():
+    s = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["hi"])
+    assert s.voice_actions == []
+
+
+def test_valid_barge_in_action():
+    from ata.models.suite import VoiceAction, VoiceActionType
+
+    s = Scenario(
+        id="s1", type=ScenarioType.POSITIVE, description="d", turns=["hi", "wait—"],
+        voice_actions=[VoiceAction(type=VoiceActionType.BARGE_IN, turn_index=1, at_ms=500)],
+    )
+    assert s.voice_actions[0].at_ms == 500
+
+
+def test_barge_in_requires_at_ms():
+    from ata.models.suite import VoiceAction, VoiceActionType
+
+    with pytest.raises(ValueError, match="at_ms"):
+        VoiceAction(type=VoiceActionType.BARGE_IN, turn_index=0)
+
+
+def test_dtmf_requires_digits():
+    from ata.models.suite import VoiceAction, VoiceActionType
+
+    with pytest.raises(ValueError, match="dtmf"):
+        VoiceAction(type=VoiceActionType.DTMF, turn_index=0)
+
+
+def test_voice_action_turn_index_out_of_range_rejected():
+    from ata.models.suite import VoiceAction, VoiceActionType
+
+    with pytest.raises(ValueError, match="out of range"):
+        Scenario(
+            id="s1", type=ScenarioType.POSITIVE, description="d", turns=["only one turn"],
+            voice_actions=[VoiceAction(type=VoiceActionType.SILENCE, turn_index=3)],
+        )

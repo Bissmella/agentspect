@@ -23,6 +23,7 @@ import asyncio
 import base64
 import json
 import time
+from typing import NamedTuple
 
 from websockets.exceptions import WebSocketException
 
@@ -32,6 +33,17 @@ from ata.models.transcript import AgentFailure, Transcript, Turn, VoiceMeta
 from ata.voice.client import VoiceIO
 
 _END_SIGNALS = {"end_of_speech", "end", "eos"}
+_DEFAULT_DEAD_AIR_GAP_MS = 500  # inter-frame gap above which mid-response silence counts as dead air
+
+
+class _AudioCapture(NamedTuple):
+    """What one agent-audio collection observed (Stage A streaming telemetry)."""
+
+    audio: bytes
+    ttfa_ms: int | None          # time to first audio frame
+    agent_speech_ms: int | None  # first-to-last audio-frame span
+    silence_gaps_ms: list[int]   # mid-response gaps above the dead-air threshold
+    timed_out: bool
 
 
 class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
@@ -41,11 +53,13 @@ class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
         voice_io: VoiceIO,
         timeout: float = 30.0,
         greeting_timeout: float | None = None,
+        dead_air_gap_ms: int = _DEFAULT_DEAD_AIR_GAP_MS,
     ):
         super().__init__(url, timeout)
         self.voice_io = voice_io
         # Agents that don't greet shouldn't stall the whole timeout.
         self.greeting_timeout = greeting_timeout if greeting_timeout is not None else min(timeout, 5.0)
+        self.dead_air_gap_ms = dead_air_gap_ms
         self._openings: dict[str, tuple[str, VoiceMeta] | None] = {}
 
     async def start_session(self, scenario_id: str) -> str:
@@ -53,12 +67,12 @@ class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
 
         # Capture an opening greeting if the agent speaks first (best-effort).
         try:
-            audio, ttfa_ms, _ = await self._collect_agent_audio(connection, self.greeting_timeout)
-            if audio:
-                result = await self.voice_io.transcribe(audio)
+            cap = await self._collect_agent_audio(connection, self.greeting_timeout)
+            if cap.audio:
+                result = await self.voice_io.transcribe(cap.audio)
                 self._openings[session_id] = (
                     result.text,
-                    self._voice_meta(ttfa_ms, result.confidence),
+                    self._voice_meta(cap, result.confidence),
                 )
             else:
                 self._openings[session_id] = None
@@ -100,24 +114,23 @@ class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
                 )
             )
 
-            audio_in, ttfa_ms, _timed_out = await self._collect_agent_audio(connection, self.timeout)
+            cap = await self._collect_agent_audio(connection, self.timeout)
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
-            
-            if not audio_in:
+            if not cap.audio:
                 return Turn(
                     user_message=message,
                     agent_response="",
                     latency_ms=latency_ms,
-                    voice=self._voice_meta(ttfa_ms, None),
+                    voice=self._voice_meta(cap, None),
                 )
 
-            result = await self.voice_io.transcribe(audio_in)
+            result = await self.voice_io.transcribe(cap.audio)
             return Turn(
                 user_message=message,
                 agent_response=result.text,
                 latency_ms=latency_ms,
-                voice=self._voice_meta(ttfa_ms, result.confidence),
+                voice=self._voice_meta(cap, result.confidence),
             )
 
         except WebSocketException:
@@ -137,25 +150,33 @@ class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
                 error=f"Voice turn failed: {type(e).__name__}: {e}",
             )
 
-    async def _collect_agent_audio(
-        self, connection, timeout: float
-    ) -> tuple[bytes, int | None, bool]:
+    async def _collect_agent_audio(self, connection, timeout: float) -> _AudioCapture:
         """Collect agent audio frames until end-of-speech or a silence timeout.
 
-        Returns (audio_bytes, time_to_first_audio_ms, timed_out).
+        Timestamps frame arrivals to capture time-to-first-audio, the speech span,
+        and mid-response silence gaps (Stage A streaming telemetry).
         """
         chunks: list[bytes] = []
         ttfa_ms: int | None = None
+        first_audio_t: float | None = None
+        last_audio_t: float | None = None
+        gaps_ms: list[int] = []
         started = time.perf_counter()
+
+        def finish(timed_out: bool) -> _AudioCapture:
+            speech_ms = None
+            if first_audio_t is not None and last_audio_t is not None:
+                speech_ms = int((last_audio_t - first_audio_t) * 1000)
+            return _AudioCapture(b"".join(chunks), ttfa_ms, speech_ms, gaps_ms, timed_out)
 
         while True:
             remaining = timeout - (time.perf_counter() - started)
             if remaining <= 0:
-                return b"".join(chunks), ttfa_ms, True
+                return finish(True)
             try:
                 raw = await asyncio.wait_for(connection.recv(), timeout=remaining)
             except TimeoutError:
-                return b"".join(chunks), ttfa_ms, True
+                return finish(True)
 
             try:
                 msg = json.loads(raw)
@@ -164,19 +185,29 @@ class VoiceWebSocketAdapter(WebSocketConnectionMixin, ProtocolAdapter):
 
             mtype = msg.get("type")
             if mtype == "audio" and msg.get("data"):
-                if ttfa_ms is None:
-                    ttfa_ms = int((time.perf_counter() - started) * 1000)
                 try:
-                    chunks.append(base64.b64decode(msg["data"]))
+                    chunk = base64.b64decode(msg["data"])
                 except (ValueError, TypeError):
                     continue
+                now = time.perf_counter()
+                if ttfa_ms is None:
+                    ttfa_ms = int((now - started) * 1000)
+                    first_audio_t = now
+                elif last_audio_t is not None:
+                    gap_ms = int((now - last_audio_t) * 1000)
+                    if gap_ms >= self.dead_air_gap_ms:
+                        gaps_ms.append(gap_ms)
+                last_audio_t = now
+                chunks.append(chunk)
             elif mtype in _END_SIGNALS:
-                return b"".join(chunks), ttfa_ms, False
+                return finish(False)
 
-    def _voice_meta(self, ttfa_ms: int | None, stt_confidence: float | None) -> VoiceMeta:
+    def _voice_meta(self, cap: _AudioCapture, stt_confidence: float | None) -> VoiceMeta:
         d = self.voice_io.defaults
         return VoiceMeta(
-            time_to_first_audio_ms=ttfa_ms,
+            time_to_first_audio_ms=cap.ttfa_ms,
+            agent_speech_ms=cap.agent_speech_ms,
+            silence_gaps_ms=list(cap.silence_gaps_ms),
             stt_confidence=stt_confidence,
             voice=d.voice,
             accent=d.accent,
