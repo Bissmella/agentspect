@@ -29,10 +29,11 @@ dev = [
     "pytest-cov>=6.0.0",
     "ruff>=0.8.0",
 ]
-# Optional: reach the long tail of STT/TTS providers (and VAD) via Pipecat.
-# Not a core dependency — the base library ships only the OpenAI reference.
+# Optional, for the thick voice channel. Provides SileroVADAnalyzer (speech-boundary
+# detection, local CPU) and the long-tail STT/TTS bridge. NOT a core dependency —
+# base ATA (thin voice + text) works without it; thick voice requires it.
 pipecat = [
-    "pipecat-ai>=0.0.40",
+    "pipecat-ai[silero]>=0.0.40",
 ]
 
 [project.urls]
