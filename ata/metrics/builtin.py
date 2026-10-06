@@ -418,3 +418,36 @@ class AgentSpeechDurationMetric(Metric):
             p95_ms=_percentile(s, 95),
             total_ms=sum(s),
         )
+
+
+
+class DataCollectionResult(BaseModel):
+    fields_checked: int
+    fields_correct: int
+    accuracy: float
+    avg_cer: float | None
+
+
+@register
+class DataCollectionMetric(Metric):
+    """How accurately the agent captured data the user provided (name, email, phone…).
+
+    Aggregates the per-field results produced by ``data_collection`` assertions on
+    recall probes: field accuracy and average character/digit error rate. Zero
+    fields → empty result (text-only runs are unaffected).
+    """
+
+    name = "data_collection_accuracy"
+    description = "Field-level accuracy of data the agent collected and recalled."
+
+    def compute(self, ctx: MetricContext) -> DataCollectionResult:
+        fields = [f for v in ctx.verdicts.values() for f in v.data_collection]
+        n = len(fields)
+        correct = sum(1 for f in fields if f.get("match"))
+        cers = [f["cer"] for f in fields if f.get("cer") is not None]
+        return DataCollectionResult(
+            fields_checked=n,
+            fields_correct=correct,
+            accuracy=correct / n if n else 0.0,
+            avg_cer=sum(cers) / len(cers) if cers else None,
+        )

@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from pydantic import BaseModel
@@ -7,6 +8,7 @@ from ata.llm.client import LLMClient
 from ata.models.suite import (
     Assertion,
     BehavioralAssertion,
+    DataCollectionAssertion,
     DependsOnType,
     Scenario,
     ScenarioType,
@@ -22,6 +24,42 @@ from ata.models.world_state import WorldState
 class AssertionResult(BaseModel):
     satisfied: bool
     reasoning: str
+
+
+class ExtractedFields(BaseModel):
+    values: dict[str, str]
+
+
+def _normalize_field(kind: str, value: str) -> str:
+    v = (value or "").strip()
+    if kind == "phone":
+        return re.sub(r"\D", "", v)
+    if kind == "email":
+        return v.lower().replace(" ", "")
+    return " ".join(v.lower().split())  # name / text
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _char_error_rate(expected: str, got: str) -> float:
+    """Edit distance normalized by expected length (0.0 = exact, 1.0 = all wrong)."""
+    if not expected:
+        return 0.0 if not got else 1.0
+    return _levenshtein(expected, got) / len(expected)
 
 
 class RecoveryClassification(BaseModel):
@@ -227,6 +265,61 @@ Did the agent ultimately exhibit "{assertion.expected_behavior}" behavior?"""
     return result
 
 
+async def _evaluate_data_collection_assertion(
+    assertion: DataCollectionAssertion,
+    transcript: Transcript,
+    llm_client: LLMClient,
+) -> tuple[AssertionResult, list[dict[str, Any]]]:
+    """Extract the agent's recalled value per field and score it against ground truth.
+
+    The LLM only *extracts* what the agent said it has on record; the match itself is
+    deterministic (normalize per kind + character/digit error rate).
+    """
+    transcript_text = "\n".join(
+        f"Turn {i+1}:\n  User: {turn.user_message}\n  Agent: {turn.agent_response}"
+        for i, turn in enumerate(transcript.turns)
+    )
+    field_names = [f.name for f in assertion.fields]
+    system_prompt = (
+        "You extract the values an AI agent has on record for a caller. Read the "
+        "transcript and, for each requested field, return the value the AGENT stated, "
+        "read back, or confirmed it has — not what the user said. If the agent never "
+        "stated a value for a field, return an empty string for it."
+    )
+    user_prompt = (
+        f"## Transcript\n{transcript_text}\n\n"
+        f"## Fields to extract\n{field_names}\n\n"
+        "Return a JSON object `values` mapping each field name to the agent's value "
+        "(empty string if absent)."
+    )
+    extracted = await llm_client.chat_with_structured_output(
+        [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+        ExtractedFields,
+        temperature=0.0,
+    )
+
+    field_results: list[dict[str, Any]] = []
+    all_ok = True
+    for field in assertion.fields:
+        got = extracted.values.get(field.name, "")
+        cer = _char_error_rate(
+            _normalize_field(field.kind, field.expected),
+            _normalize_field(field.kind, got),
+        )
+        match = cer <= assertion.max_cer
+        all_ok = all_ok and match
+        field_results.append(
+            {"field": field.name, "expected": field.expected, "got": got,
+             "cer": round(cer, 3), "match": match}
+        )
+
+    reasoning = "; ".join(
+        f"{r['field']}: {'ok' if r['match'] else 'MISS'} (cer={r['cer']}, got={r['got']!r})"
+        for r in field_results
+    )
+    return AssertionResult(satisfied=all_ok, reasoning=reasoning), field_results
+
+
 async def _evaluate_assertion(
     assertion: Assertion,
     transcript: Transcript,
@@ -404,11 +497,18 @@ async def scorer_node(
 
         assertion_results: list[dict[str, Any]] = []
         results: list[AssertionResult] = []
+        data_collection_results: list[dict[str, Any]] = []
 
         for assertion in scenario.assertions:
-            result = await _evaluate_assertion(
-                assertion, transcript, before_snapshot, after_snapshot, llm_client
-            )
+            if isinstance(assertion, DataCollectionAssertion):
+                result, field_results = await _evaluate_data_collection_assertion(
+                    assertion, transcript, llm_client
+                )
+                data_collection_results.extend(field_results)
+            else:
+                result = await _evaluate_assertion(
+                    assertion, transcript, before_snapshot, after_snapshot, llm_client
+                )
             results.append(result)
             assertion_results.append({
                 "assertion": assertion.model_dump() if hasattr(assertion, "model_dump") else str(assertion),
@@ -463,6 +563,7 @@ async def scorer_node(
             reason=reason,
             assertion_results=assertion_results,
             recovery_quality=recovery_quality,
+            data_collection=data_collection_results,
         )
 
     return {

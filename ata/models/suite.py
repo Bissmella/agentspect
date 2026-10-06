@@ -46,8 +46,36 @@ class BehavioralAssertion(BaseModel):
     )
 
 
+class DataField(BaseModel):
+    """One piece of data the agent was asked to collect, with its ground truth."""
+
+    name: str  # e.g. "email", "phone", "full_name"
+    expected: str  # the true value the persona provided (from world_state)
+    kind: str = Field(default="text", pattern=r"^(phone|email|name|text)$")
+
+
+class DataCollectionAssertion(BaseModel):
+    """Checks how accurately the agent captured data the user provided.
+
+    Evaluated on a **recall** transcript — a follow-up turn/probe where the agent
+    reads the data back or is asked for it. Each field's recalled value is extracted from the transcript
+    and compared to ground truth, normalized per ``kind``, with a character/digit
+    error rate (so "one digit off" scores as a near-miss, not a binary fail).
+    """
+
+    type: Literal["data_collection"] = "data_collection"
+    description: str
+    fields: list[DataField]
+    max_cer: float = Field(default=0.0, ge=0.0, le=1.0)  # per-field tolerance (0 = exact)
+
+
 Assertion = Annotated[
-    Union[WorldStateAssertion, TranscriptAssertion, BehavioralAssertion],
+    Union[
+        WorldStateAssertion,
+        TranscriptAssertion,
+        BehavioralAssertion,
+        DataCollectionAssertion,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -109,3 +137,4 @@ class ScenarioVerdict(BaseModel):
     reason: str
     assertion_results: list[dict[str, Any]] = Field(default_factory=list)
     recovery_quality: str | None = None
+    data_collection: list[dict[str, Any]] = Field(default_factory=list)

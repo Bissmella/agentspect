@@ -67,3 +67,9 @@ Do not call _materialize when you receive an AsyncIterator. Keep the tokens flow
 Emit ATA_SPEECH_START at the moment the first audio frame is sent, not before synthesis starts.
 Keep the VAD / TTFA / silence-gap logic you already wrote; it is useful. Just run it on the concurrent receive loop.
 
+
+
+12. in the scorer.py, I see you have added the data collection as an assertion. at this point idk anymore the difference between the metric and assertion, so explain me that based on the code and our plan. then another thing is that a data collection assertion should be optional, maybe an agent is not even doing any kind of data collection.
+
+13. in the models/suite.py it says that the user's value for a data collection field is coming from world state. but in fact for the data collection accuracy checking purposes, diversity of data to check, it should be creatively decided/envisaged by scenario generator or any other agent.
+
