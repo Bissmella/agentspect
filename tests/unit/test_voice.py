@@ -8,6 +8,8 @@ from ata.adapters.base import ProtocolAdapter
 from ata.adapters.voice_ws_adapter import VoiceWebSocketAdapter
 from ata.adapters.ws_adapter import create_adapter
 from ata.metrics.builtin import (
+    AgentSpeechDurationMetric,
+    DeadAirMetric,
     GreetingRateMetric,
     IntelligibilityMetric,
     NoResponseRateMetric,
@@ -457,3 +459,276 @@ async def test_disconnect_on_final_turn_is_cleared():
 
     assert transcript.turns[0].agent_failure is None  # gated away on the final turn
     assert verdict is None
+
+
+# ── Stage A: streaming capture + observational metrics ─────────────────────────
+
+async def test_adapter_captures_speech_span_and_gaps():
+    # greeting (no audio), then three agent audio frames + end. With the dead-air
+    # threshold at 0, every inter-frame gap is recorded → 2 gaps for 3 frames.
+    af = _audio_frame("hi")
+    conn = FakeConnection([_EOS, af, af, af, _EOS])
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=_fake_voice_io(), timeout=5.0, dead_air_gap_ms=0
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    assert turn.voice is not None
+    assert turn.voice.agent_speech_ms is not None
+    assert len(turn.voice.silence_gaps_ms) == 2
+    await adapter.close()
+
+
+def test_dead_air_metric():
+    t = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
+    t.add_turn(Turn(user_message="a", agent_response="b", voice=VoiceMeta(silence_gaps_ms=[600, 1200])))
+    t.add_turn(Turn(user_message="c", agent_response="d", voice=VoiceMeta(silence_gaps_ms=[])))
+    result = _run_metric(DeadAirMetric(), t)
+    assert result.turns_with_gaps == 1
+    assert result.total_gaps == 2
+    assert result.max_gap_ms == 1200
+    assert result.total_dead_air_ms == 1800
+
+
+def test_agent_speech_duration_metric():
+    t = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
+    t.add_turn(Turn(user_message="a", agent_response="b", voice=VoiceMeta(agent_speech_ms=1000)))
+    t.add_turn(Turn(user_message="c", agent_response="d", voice=VoiceMeta(agent_speech_ms=3000)))
+    result = _run_metric(AgentSpeechDurationMetric(), t)
+    assert result.turns == 2
+    assert result.avg_ms == 2000.0
+    assert result.total_ms == 4000
+
+
+# ── Stage B (B3): timed voice-action scenario schema ───────────────────────────
+
+def test_scenario_defaults_to_no_voice_actions():
+    s = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["hi"])
+    assert s.voice_actions == []
+
+
+def test_valid_barge_in_action():
+    from ata.models.suite import VoiceAction, VoiceActionType
+
+    s = Scenario(
+        id="s1", type=ScenarioType.POSITIVE, description="d", turns=["hi", "wait—"],
+        voice_actions=[VoiceAction(type=VoiceActionType.BARGE_IN, turn_index=1, at_ms=500)],
+    )
+    assert s.voice_actions[0].at_ms == 500
+
+
+def test_barge_in_requires_at_ms():
+    from ata.models.suite import VoiceAction, VoiceActionType
+
+    with pytest.raises(ValueError, match="at_ms"):
+        VoiceAction(type=VoiceActionType.BARGE_IN, turn_index=0)
+
+
+def test_dtmf_requires_digits():
+    from ata.models.suite import VoiceAction, VoiceActionType
+
+    with pytest.raises(ValueError, match="dtmf"):
+        VoiceAction(type=VoiceActionType.DTMF, turn_index=0)
+
+
+def test_voice_action_turn_index_out_of_range_rejected():
+    from ata.models.suite import VoiceAction, VoiceActionType
+
+    with pytest.raises(ValueError, match="out of range"):
+        Scenario(
+            id="s1", type=ScenarioType.POSITIVE, description="d", turns=["only one turn"],
+            voice_actions=[VoiceAction(type=VoiceActionType.SILENCE, turn_index=3)],
+        )
+
+
+# ── Stage B2: event-timeline model ─────────────────────────────────────────────
+
+def test_transcript_voice_events_default_empty():
+    t = Transcript(scenario_id="s1", session_id="x", protocol="http")
+    assert t.voice_events == []
+
+
+def test_transcript_voice_events_flattens_turns():
+    from ata.models.transcript import VoiceEvent, VoiceEventKind
+
+    ev = VoiceEvent(t_ms=120, kind=VoiceEventKind.AGENT_SPEECH_START, party="agent")
+    t = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
+    t.add_turn(Turn(user_message="a", agent_response="b", voice_events=[ev]))
+    # scenario-level timeline is derived from per-turn events
+    assert len(t.voice_events) == 1
+    assert t.voice_events[0].kind == VoiceEventKind.AGENT_SPEECH_START
+
+
+# ── Stage B1: VAD guard + duplex session ───────────────────────────────────────
+
+def test_silero_vad_detector_requires_extra():
+    # pipecat is not installed in the test env → actionable ImportError.
+    from ata.voice.vad import SileroVadDetector
+
+    with pytest.raises(ImportError, match=r"ata\[pipecat\]"):
+        SileroVadDetector()
+
+
+class _ScriptedVad:
+    """Fake VadDetector returning a scripted state per analyze() call."""
+
+    sample_rate = 16000
+
+    def __init__(self, states):
+        from ata.voice.vad import VadState
+
+        self._states = list(states)
+        self._quiet = VadState.QUIET
+
+    async def analyze(self, pcm: bytes):
+        return self._states.pop(0) if self._states else self._quiet
+
+
+def _kinds(events):
+    return [e.kind.value for e in events]
+
+
+async def test_adapter_with_vad_emits_agent_speech_events():
+    # With a VAD, the receive path marks the agent's speech boundaries on the turn.
+    from ata.voice.vad import VadState
+
+    conn = FakeConnection([_EOS, _audio_frame("a"), _audio_frame("b"), _EOS])
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=_fake_voice_io(), timeout=1.0,
+        vad=_ScriptedVad([VadState.SPEAKING, VadState.QUIET]),
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    kinds = _kinds(turn.voice_events)
+    assert kinds[0] == "ata_speech_start"  # ATA's own send is always marked
+    assert "agent_speech_start" in kinds and "agent_speech_stop" in kinds
+    await adapter.close()
+
+
+async def test_adapter_without_vad_records_no_agent_speech_events():
+    # No VAD (thin voice, no pipecat) → ATA events only, no agent boundary events.
+    conn = FakeConnection([_EOS, _audio_frame("a"), _EOS])
+    adapter = _adapter_with(conn)
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    kinds = _kinds(turn.voice_events)
+    assert "ata_speech_start" in kinds
+    assert "agent_speech_start" not in kinds
+    await adapter.close()
+
+
+async def test_send_turn_accepts_a_token_stream():
+    # send_turn takes str OR an async iterator of tokens (the streaming shape).
+    async def tokens():
+        for t in ["he", "llo"]:
+            yield t
+
+    conn = FakeConnection([_EOS, _audio_frame("ok"), _EOS])
+    adapter = _adapter_with(conn)
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, tokens())
+    assert turn.user_message == "hello"  # tokens materialized
+    await adapter.close()
+
+
+# ── Simulator → adapter token streaming ────────────────────────────────────────
+
+class _FakeStreamLLM:
+    async def chat(self, messages, **kwargs):
+        from ata.llm.client import LLMResponse
+
+        return LLMResponse(content="full message")
+
+    async def chat_stream(self, messages, **kwargs):
+        for tok in ["Hel", "lo"]:
+            yield tok
+
+
+class _RecordingAdapter(ProtocolAdapter):
+    supports_token_stream = True
+
+    def __init__(self):
+        super().__init__(url="rec://x")
+        self.message_types: list[str] = []
+
+    async def start_session(self, scenario_id: str) -> str:
+        return "sess"
+
+    async def send_turn(self, session_id, message):
+        if isinstance(message, str):
+            self.message_types.append("str")
+            text = message
+        else:
+            self.message_types.append("stream")
+            text = "".join([t async for t in message])
+        return Turn(user_message=text, agent_response="ok")
+
+    async def end_session(self, session_id: str) -> None:
+        pass
+
+
+async def test_user_simulator_streams_tokens_to_streaming_adapter():
+    from ata.agents.user_simulator import _run_single_scenario
+    from ata.models.world_state import WorldState
+
+    scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["hi", "again"])
+    adapter = _RecordingAdapter()
+    ws = WorldState({"entities": [], "catalog": {}, "constraints": [], "context": {}})
+
+    transcript, _ = await _run_single_scenario(scenario, ws, adapter, _FakeStreamLLM())
+
+    # turn 0 is a plain string; the adapted turn 1 is streamed as LLM tokens
+    assert adapter.message_types == ["str", "stream"]
+    # and the streamed turn's text was assembled from the tokens, not the batch chat()
+    assert transcript.turns[1].user_message == "Hello"
+
+
+# ── Streaming STT: inbound transcription via transcribe_stream ─────────────────
+
+async def test_transcribe_stream_default_is_batch_backed():
+    vio = _fake_voice_io()
+
+    async def chunks():
+        for part in [b"book ", b"me a slot"]:
+            yield part
+
+    results = [r async for r in vio.transcribe_stream(chunks())]
+    assert len(results) == 1  # batch-backed default: one final result
+    assert results[0].text == "book me a slot"
+
+
+async def test_adapter_builds_response_from_streaming_stt_partials():
+    from ata.voice.client import TranscriptionResult
+
+    class _StreamingVoiceIO(VoiceIO):
+        async def transcribe_stream(self, audio_chunks):
+            async for _ in audio_chunks:  # drain inbound audio
+                pass
+            yield TranscriptionResult(text="booked", confidence=0.7)
+            yield TranscriptionResult(text="now", confidence=0.9)
+
+    conn = FakeConnection([_EOS, _audio_frame("x"), _EOS])
+    vio = _StreamingVoiceIO(stt=FakeSTT(), tts=FakeTTS(),
+                            defaults=VoiceIODefaults(voice="alloy", language="en"))
+    adapter = VoiceWebSocketAdapter(url="wss://x", voice_io=vio, timeout=1.0)
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    # the agent response is assembled from the streamed partial transcripts
+    assert turn.agent_response == "booked now"
+    assert turn.voice.stt_confidence == 0.9  # last partial's confidence
+    await adapter.close()

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from typing import Any
 
 from pydantic import BaseModel
@@ -31,6 +32,22 @@ class LLMClient(ABC):
         temperature: float = 0.0,
     ) -> BaseModel:
         pass
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> AsyncIterator[str]:
+        """Stream the assistant's reply as text tokens.
+
+        Default: a single chunk from ``chat`` (so every provider works). Providers
+        with a streaming API override this to yield real token deltas — which the
+        voice channel feeds straight into streaming TTS.
+        """
+        response = await self.chat(messages, temperature=temperature, max_tokens=max_tokens)
+        if response.content:
+            yield response.content
 
 
 class AnthropicClient(LLMClient):
@@ -114,6 +131,27 @@ class AnthropicClient(LLMClient):
         raise ValueError("LLM did not return structured output via tool call")
 
 
+    async def chat_stream(self, messages, temperature=0.7, max_tokens=4096):
+        system_message = None
+        chat_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_message = msg["content"]
+            else:
+                chat_messages.append(msg)
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": chat_messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if system_message:
+            kwargs["system"] = system_message
+        async with self.client.messages.stream(**kwargs) as stream:
+            async for text in stream.text_stream:
+                yield text
+
+
 class OpenAIClient(LLMClient):
     def __init__(self, model: str, api_key: str | None = None):
         import openai
@@ -180,6 +218,19 @@ class OpenAIClient(LLMClient):
             return output_schema.model_validate(response.tool_calls[0]["arguments"])
 
         raise ValueError("LLM did not return structured output via tool call")
+
+
+    async def chat_stream(self, messages, temperature=0.7, max_tokens=4096):
+        stream = await self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True,
+        )
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
 
 
 class OpenAICompatibleClient(LLMClient):

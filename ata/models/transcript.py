@@ -40,6 +40,24 @@ class VoiceMeta(BaseModel):
     audio_ref: str | None = None  # blob key for recorded audio, if stored
 
 
+class VoiceEventKind(str, Enum):
+    """Timestamped events on a duplex voice conversation (Stage B, thick)."""
+
+    AGENT_SPEECH_START = "agent_speech_start"  # from VAD on the agent's audio
+    AGENT_SPEECH_STOP = "agent_speech_stop"
+    ATA_SPEECH_START = "ata_speech_start"      # ATA began sending its own audio
+    ATA_SPEECH_STOP = "ata_speech_stop"
+    DTMF_SENT = "dtmf_sent"
+    SILENCE_WINDOW = "silence_window"          # ATA deliberately sent nothing and waited
+
+
+class VoiceEvent(BaseModel):
+    t_ms: int  # milliseconds since the duplex session started
+    kind: VoiceEventKind
+    party: str  # "agent" | "ata"
+    detail: str | None = None
+
+
 class Turn(BaseModel):
     user_message: str
     agent_response: str
@@ -48,6 +66,7 @@ class Turn(BaseModel):
     error: str | None = None  # framework/transport fault (ATA's side) -> ERROR verdict
     agent_failure: AgentFailure | None = None  # agent's behavioral fault -> scored as a failed run
     voice: VoiceMeta | None = None
+    voice_events: list[VoiceEvent] = Field(default_factory=list)  # duplex timeline for this turn
 
 
 class Transcript(BaseModel):
@@ -85,3 +104,8 @@ class Transcript(BaseModel):
             if turn.agent_failure is not None:
                 return turn.agent_failure
         return None
+
+    @property
+    def voice_events(self) -> list[VoiceEvent]:
+        """The duplex voice timeline for the whole conversation (flattened turns)."""
+        return [event for turn in self.turns for event in turn.voice_events]

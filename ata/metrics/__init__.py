@@ -14,9 +14,13 @@ from ata.metrics.base import Metric, MetricContext
 # Importing the built-in classes runs ata.metrics.builtin, whose @register
 # decorators populate the default registry.
 from ata.metrics.builtin import (
+    AgentSpeechDurationMetric,
+    AgentSpeechDurationResult,
     BoundaryAdherence,
     ConstraintViolations,
     ConversationEfficiency,
+    DeadAirMetric,
+    DeadAirResult,
     GreetingRateMetric,
     GreetingRateResult,
     IntelligibilityMetric,
@@ -77,6 +81,8 @@ __all__ = [
     "GreetingRateMetric",
     "PrematureDisconnectMetric",
     "IntelligibilityMetric",
+    "DeadAirMetric",
+    "AgentSpeechDurationMetric",
     # result models
     "LatencyResult",
     "TurnErrorRateResult",
@@ -85,6 +91,8 @@ __all__ = [
     "GreetingRateResult",
     "PrematureDisconnectResult",
     "IntelligibilityResult",
+    "DeadAirResult",
+    "AgentSpeechDurationResult",
     "QuantitativeMetrics",
     "TaskCompletionMetric",
     "BoundaryAdherenceMetric",

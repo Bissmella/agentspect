@@ -13,6 +13,7 @@ accent defaults, recording which were used so the adapter can stamp ``VoiceMeta`
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 from pydantic import BaseModel
 
@@ -76,3 +77,38 @@ class VoiceIO:
             language=self.defaults.language,
             accent=self.defaults.accent,
         )
+
+    async def synthesize_stream(self, tokens: AsyncIterator[str]) -> AsyncIterator[bytes]:
+        """Stream TTS: yield audio as text arrives, flushing on word boundaries.
+
+        ``tokens`` is an async iterator of text chunks (LLM tokens). This batch-backed
+        default buffers to whole words and synthesizes each — enough to keep the
+        duplex pipeline streaming-shaped. A real streaming TTS (Pipecat) replaces this
+        method body without touching callers.
+        """
+        buffer = ""
+        async for token in tokens:
+            buffer += token
+            if buffer and buffer[-1].isspace():
+                chunk = buffer.strip()
+                if chunk:
+                    yield await self.synthesize(chunk)
+                buffer = ""
+        if buffer.strip():
+            yield await self.synthesize(buffer.strip())
+
+    async def transcribe_stream(
+        self, audio_chunks: AsyncIterator[bytes]
+    ) -> AsyncIterator[TranscriptionResult]:
+        """Stream STT: transcribe inbound audio as it arrives, yielding final results.
+
+        This batch-backed default accumulates the chunks and transcribes once (one
+        final result). A real streaming STT (Pipecat) overrides this to yield final
+        transcripts as they finalize, so the caller builds the agent's utterance
+        without waiting for the agent to finish speaking.
+        """
+        buffer = bytearray()
+        async for chunk in audio_chunks:
+            buffer.extend(chunk)
+        if buffer:
+            yield await self.transcribe(bytes(buffer))

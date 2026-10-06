@@ -348,3 +348,73 @@ class IntelligibilityMetric(Metric):
             avg_confidence=sum(self._confidences) / n if n else None,
             unintelligible_turns=self._unintelligible,
         )
+
+
+class DeadAirResult(BaseModel):
+    turns_with_gaps: int
+    total_gaps: int
+    max_gap_ms: int | None
+    total_dead_air_ms: int
+
+
+@register
+class DeadAirMetric(Metric):
+    """Mid-response silence: pauses in the agent's own speech.
+
+    Reads ``VoiceMeta.silence_gaps_ms`` (inter-frame gaps above the adapter's
+    dead-air threshold).
+    """
+
+    name = "dead_air"
+    description = "Mid-response silence gaps in the agent's speech."
+
+    def __init__(self) -> None:
+        self._turns_with_gaps = 0
+        self._gaps: list[int] = []
+
+    def on_turn(self, ctx: MetricContext, scenario: Scenario, turn: Turn, index: int) -> None:
+        if turn.voice and turn.voice.silence_gaps_ms:
+            self._turns_with_gaps += 1
+            self._gaps.extend(turn.voice.silence_gaps_ms)
+
+    def compute(self, ctx: MetricContext) -> DeadAirResult:
+        return DeadAirResult(
+            turns_with_gaps=self._turns_with_gaps,
+            total_gaps=len(self._gaps),
+            max_gap_ms=max(self._gaps) if self._gaps else None,
+            total_dead_air_ms=sum(self._gaps),
+        )
+
+
+class AgentSpeechDurationResult(BaseModel):
+    turns: int
+    avg_ms: float | None
+    p50_ms: float | None
+    p95_ms: float | None
+    total_ms: int
+
+
+@register
+class AgentSpeechDurationMetric(Metric):
+    """How long the agent speaks per turn (``VoiceMeta.agent_speech_ms``)."""
+
+    name = "agent_speech_duration"
+    description = "Agent speech duration per turn (ms)."
+
+    def __init__(self) -> None:
+        self._samples: list[int] = []
+
+    def on_turn(self, ctx: MetricContext, scenario: Scenario, turn: Turn, index: int) -> None:
+        if turn.error is None and turn.voice and turn.voice.agent_speech_ms is not None:
+            self._samples.append(turn.voice.agent_speech_ms)
+
+    def compute(self, ctx: MetricContext) -> AgentSpeechDurationResult:
+        s = sorted(self._samples)
+        n = len(s)
+        return AgentSpeechDurationResult(
+            turns=n,
+            avg_ms=sum(s) / n if n else None,
+            p50_ms=_percentile(s, 50),
+            p95_ms=_percentile(s, 95),
+            total_ms=sum(s),
+        )

@@ -115,6 +115,11 @@ async def _run_single_scenario(
                 )
                 break
 
+            # `message` is what we hand the adapter: a plain string, or — for a
+            # streaming (voice) adapter on an adapted turn — the LLM token stream
+            # itself, so tokens flow straight into streaming TTS.
+            message: str | Any = user_message
+            streaming = getattr(adapter, "supports_token_stream", False)
             if i > 0 and conversation_history:
                 system_prompt = _build_persona_prompt(scenario, world_state)
                 last_agent_response = conversation_history[-1]['content'] if conversation_history else ''
@@ -138,11 +143,18 @@ IMPORTANT: Use your real persona data (phone, name, etc.) - do not make up value
 Return ONLY the message you want to send. No explanations or quotes.""",
                     },
                 ]
-                response = await llm_client.chat(adapt_messages, temperature=0.3)
-                user_message = response.content.strip() or user_message
+                if streaming:
+                    message = llm_client.chat_stream(adapt_messages, temperature=0.3)
+                else:
+                    response = await llm_client.chat(adapt_messages, temperature=0.3)
+                    user_message = response.content.strip() or user_message
+                    message = user_message
 
             is_last_turn = i == len(scenario.turns) - 1
-            turn = await adapter.send_turn(session_id, user_message)
+            turn = await adapter.send_turn(session_id, message)
+            # For a streamed turn, recover what was actually said from the adapter.
+            if not isinstance(message, str):
+                user_message = turn.user_message or user_message
 
             
             blank = not turn.agent_response.strip()
