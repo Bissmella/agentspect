@@ -46,8 +46,45 @@ class BehavioralAssertion(BaseModel):
     )
 
 
+class DataField(BaseModel):
+    """One piece of data the agent was asked to collect, with its ground truth.
+
+    ``expected`` is the value the test *decides* the caller will provide — invented
+    by the ScenarioGenerator for diversity and difficulty (unusual spellings,
+    dotted/plus-tagged emails, international phone formats), NOT pulled from
+    ``world_state``. The generator plants this value in the collection turns so the
+    user simulator speaks it, then the recall probe checks the agent captured it.
+    """
+
+    name: str  # e.g. "email", "phone", "full_name"
+    expected: str  # ground-truth value the caller provides (generator-envisaged)
+    kind: str = Field(default="text", pattern=r"^(phone|email|name|text)$")
+
+
+class DataCollectionAssertion(BaseModel):
+    """Checks how accurately the agent captured data the user provided.
+
+    Optional — only scenarios that actually test data collection carry one; agents
+    that don't collect data get none. Evaluated on a **recall** transcript (a
+    follow-up turn/probe where the agent reads the data back or is asked for it):
+    each field's recalled value is extracted and compared to ground truth,
+    normalized per ``kind``, with a character/digit error rate (so "one digit off"
+    scores as a near-miss, not a binary fail).
+    """
+
+    type: Literal["data_collection"] = "data_collection"
+    description: str
+    fields: list[DataField]
+    max_cer: float = Field(default=0.0, ge=0.0, le=1.0)  # per-field tolerance (0 = exact)
+
+
 Assertion = Annotated[
-    Union[WorldStateAssertion, TranscriptAssertion, BehavioralAssertion],
+    Union[
+        WorldStateAssertion,
+        TranscriptAssertion,
+        BehavioralAssertion,
+        DataCollectionAssertion,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -109,3 +146,4 @@ class ScenarioVerdict(BaseModel):
     reason: str
     assertion_results: list[dict[str, Any]] = Field(default_factory=list)
     recovery_quality: str | None = None
+    data_collection: list[dict[str, Any]] = Field(default_factory=list)
