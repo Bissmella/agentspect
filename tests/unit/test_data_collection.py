@@ -123,3 +123,13 @@ def test_data_collection_metric_aggregates():
     assert result.fields_correct == 1
     assert result.accuracy == 0.5
     assert result.avg_cer == pytest.approx((0.0 + 0.333) / 2)
+
+
+def test_data_collection_metric_na_when_no_fields():
+    # An agent that does no data collection → accuracy is None (not 0.0).
+    v = ScenarioVerdict(scenario_id="s1", verdict=Verdict.SUCCESS, reason="")
+    ctx = MetricContext(verdicts={"s1": v})
+    result = DataCollectionMetric().compute(ctx)
+    assert result.fields_checked == 0
+    assert result.accuracy is None
+    assert result.avg_cer is None

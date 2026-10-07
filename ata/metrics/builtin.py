@@ -424,7 +424,7 @@ class AgentSpeechDurationMetric(Metric):
 class DataCollectionResult(BaseModel):
     fields_checked: int
     fields_correct: int
-    accuracy: float
+    accuracy: float | None  # None = no data-collection scenarios ran (not applicable)
     avg_cer: float | None
 
 
@@ -433,8 +433,9 @@ class DataCollectionMetric(Metric):
     """How accurately the agent captured data the user provided (name, email, phone…).
 
     Aggregates the per-field results produced by ``data_collection`` assertions on
-    recall probes: field accuracy and average character/digit error rate. Zero
-    fields → empty result (text-only runs are unaffected).
+    recall probes: field accuracy and average character/digit error rate. Optional —
+    when no data-collection scenarios ran, ``accuracy`` is ``None`` (not applicable),
+    not 0.0, so a non-collecting agent doesn't look like it scored zero.
     """
 
     name = "data_collection_accuracy"
@@ -448,6 +449,6 @@ class DataCollectionMetric(Metric):
         return DataCollectionResult(
             fields_checked=n,
             fields_correct=correct,
-            accuracy=correct / n if n else 0.0,
+            accuracy=correct / n if n else None,
             avg_cer=sum(cers) / len(cers) if cers else None,
         )
