@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, UTC
-from ata.models.transcript import Transcript, Turn
+from agentspect.models.transcript import Transcript, Turn
 
 def test_add_trun_updates_list():
     transcript = Transcript(scenario_id="sc_1", session_id="sess_1", protocol="http")

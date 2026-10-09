@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from ata.agents.asset_ingestion import IngestedEntities, asset_ingestion_node
-from ata.assets import (
+from agentspect.agents.asset_ingestion import IngestedEntities, asset_ingestion_node
+from agentspect.assets import (
     Asset,
     AssetLoadError,
     infer_format,
@@ -11,9 +11,9 @@ from ata.assets import (
     loader_registry,
     stratified_indices,
 )
-from ata.assets.loaders import CSVLoader, JSONLLoader
-from ata.models.world_state import WorldState
-from ata.models.yaml_input import AssetSpec
+from agentspect.assets.loaders import CSVLoader, JSONLLoader
+from agentspect.models.world_state import WorldState
+from agentspect.models.yaml_input import AssetSpec
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────

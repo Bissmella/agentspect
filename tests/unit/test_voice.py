@@ -4,10 +4,10 @@ import base64
 import json
 
 import pytest
-from ata.adapters.base import ProtocolAdapter
-from ata.adapters.voice_ws_adapter import VoiceWebSocketAdapter
-from ata.adapters.ws_adapter import create_adapter
-from ata.metrics.builtin import (
+from agentspect.adapters.base import ProtocolAdapter
+from agentspect.adapters.voice_ws_adapter import VoiceWebSocketAdapter
+from agentspect.adapters.ws_adapter import create_adapter
+from agentspect.metrics.builtin import (
     AgentSpeechDurationMetric,
     DeadAirMetric,
     GreetingRateMetric,
@@ -16,17 +16,17 @@ from ata.metrics.builtin import (
     PrematureDisconnectMetric,
     TimeToFirstAudioMetric,
 )
-from ata.models.suite import Scenario, ScenarioType
-from ata.models.transcript import AgentFailure, Transcript, Turn, VoiceMeta
-from ata.models.yaml_input import STTSpec, TTSSpec, VoiceConfig
-from ata.voice.client import (
+from agentspect.models.suite import Scenario, ScenarioType
+from agentspect.models.transcript import AgentFailure, Transcript, Turn, VoiceMeta
+from agentspect.models.yaml_input import STTSpec, TTSSpec, VoiceConfig
+from agentspect.voice.client import (
     STTClient,
     TranscriptionResult,
     TTSClient,
     VoiceIO,
     VoiceIODefaults,
 )
-from ata.voice.registry import create_voice_io, register_stt, register_tts
+from agentspect.voice.registry import create_voice_io, register_stt, register_tts
 
 # ── Fakes ─────────────────────────────────────────────────────────────────────
 
@@ -136,7 +136,7 @@ def test_create_voice_io_unknown_provider_raises():
 
 
 def test_openai_reference_is_registered():
-    from ata.voice.registry import stt_registry, tts_registry
+    from agentspect.voice.registry import stt_registry, tts_registry
 
     assert "openai" in stt_registry
     assert "openai" in tts_registry
@@ -252,7 +252,7 @@ def _mk_scenario(sid: str) -> Scenario:
 
 
 def test_time_to_first_audio_metric():
-    from ata.metrics.base import MetricContext
+    from agentspect.metrics.base import MetricContext
 
     transcript = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
     transcript.add_turn(Turn(user_message="a", agent_response="b", voice=VoiceMeta(time_to_first_audio_ms=100)))
@@ -270,7 +270,7 @@ def test_time_to_first_audio_metric():
 
 
 def test_time_to_first_audio_metric_ignores_text_turns():
-    from ata.metrics.base import MetricContext
+    from agentspect.metrics.base import MetricContext
 
     transcript = Transcript(scenario_id="s1", session_id="x", protocol="http")
     transcript.add_turn(Turn(user_message="a", agent_response="b"))  # no voice meta
@@ -298,7 +298,7 @@ def test_transcript_agent_failure_property_returns_last():
 
 
 def _ctx_with(transcript):
-    from ata.metrics.base import MetricContext
+    from agentspect.metrics.base import MetricContext
 
     scenario = _mk_scenario(transcript.scenario_id)
     return MetricContext(scenarios=[scenario], transcripts={transcript.scenario_id: transcript}), scenario
@@ -359,8 +359,8 @@ async def test_scorer_agent_failure_forces_failure_despite_passing_assertions():
     when the (mocked) assertion evaluator would say the check passed."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from ata.agents.scorer import AssertionResult, scorer_node
-    from ata.models.suite import ScenarioType, TranscriptAssertion, Verdict
+    from agentspect.agents.scorer import AssertionResult, scorer_node
+    from agentspect.models.suite import ScenarioType, TranscriptAssertion, Verdict
 
     llm = MagicMock()
     llm.chat_with_structured_output = AsyncMock(
@@ -411,7 +411,7 @@ class _ScriptedAdapter(ProtocolAdapter):
 
 
 def _mk_ws():
-    from ata.models.world_state import WorldState
+    from agentspect.models.world_state import WorldState
 
     return WorldState({"entities": [], "catalog": {}, "constraints": [], "context": {}})
 
@@ -419,7 +419,7 @@ def _mk_ws():
 async def test_blank_midconversation_is_no_response():
     from unittest.mock import AsyncMock, MagicMock
 
-    from ata.agents.user_simulator import _run_single_scenario
+    from agentspect.agents.user_simulator import _run_single_scenario
 
     scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["one", "two"])
     adapter = _ScriptedAdapter([("", None)])  # blank on turn 1 → should stop before turn 2
@@ -436,7 +436,7 @@ async def test_blank_midconversation_is_no_response():
 async def test_blank_on_final_turn_is_not_a_failure():
     from unittest.mock import MagicMock
 
-    from ata.agents.user_simulator import _run_single_scenario
+    from agentspect.agents.user_simulator import _run_single_scenario
 
     scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["bye"])
     adapter = _ScriptedAdapter([("", None)])  # blank on the only/last turn → acceptable end
@@ -450,7 +450,7 @@ async def test_blank_on_final_turn_is_not_a_failure():
 async def test_disconnect_on_final_turn_is_cleared():
     from unittest.mock import MagicMock
 
-    from ata.agents.user_simulator import _run_single_scenario
+    from agentspect.agents.user_simulator import _run_single_scenario
 
     scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["bye"])
     adapter = _ScriptedAdapter([("", AgentFailure.DISCONNECTED)])  # agent hangs up after goodbye
@@ -513,7 +513,7 @@ def test_scenario_defaults_to_no_voice_actions():
 
 
 def test_valid_barge_in_action():
-    from ata.models.suite import VoiceAction, VoiceActionType
+    from agentspect.models.suite import VoiceAction, VoiceActionType
 
     s = Scenario(
         id="s1", type=ScenarioType.POSITIVE, description="d", turns=["hi", "wait—"],
@@ -523,21 +523,21 @@ def test_valid_barge_in_action():
 
 
 def test_barge_in_requires_at_ms():
-    from ata.models.suite import VoiceAction, VoiceActionType
+    from agentspect.models.suite import VoiceAction, VoiceActionType
 
     with pytest.raises(ValueError, match="at_ms"):
         VoiceAction(type=VoiceActionType.BARGE_IN, turn_index=0)
 
 
 def test_dtmf_requires_digits():
-    from ata.models.suite import VoiceAction, VoiceActionType
+    from agentspect.models.suite import VoiceAction, VoiceActionType
 
     with pytest.raises(ValueError, match="dtmf"):
         VoiceAction(type=VoiceActionType.DTMF, turn_index=0)
 
 
 def test_voice_action_turn_index_out_of_range_rejected():
-    from ata.models.suite import VoiceAction, VoiceActionType
+    from agentspect.models.suite import VoiceAction, VoiceActionType
 
     with pytest.raises(ValueError, match="out of range"):
         Scenario(
@@ -554,7 +554,7 @@ def test_transcript_voice_events_default_empty():
 
 
 def test_transcript_voice_events_flattens_turns():
-    from ata.models.transcript import VoiceEvent, VoiceEventKind
+    from agentspect.models.transcript import VoiceEvent, VoiceEventKind
 
     ev = VoiceEvent(t_ms=120, kind=VoiceEventKind.AGENT_SPEECH_START, party="agent")
     t = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
@@ -568,9 +568,9 @@ def test_transcript_voice_events_flattens_turns():
 
 def test_silero_vad_detector_requires_extra():
     # pipecat is not installed in the test env → actionable ImportError.
-    from ata.voice.vad import SileroVadDetector
+    from agentspect.voice.vad import SileroVadDetector
 
-    with pytest.raises(ImportError, match=r"ata\[pipecat\]"):
+    with pytest.raises(ImportError, match=r"agentspect\[pipecat\]"):
         SileroVadDetector()
 
 
@@ -580,7 +580,7 @@ class _ScriptedVad:
     sample_rate = 16000
 
     def __init__(self, states):
-        from ata.voice.vad import VadState
+        from agentspect.voice.vad import VadState
 
         self._states = list(states)
         self._quiet = VadState.QUIET
@@ -595,7 +595,7 @@ def _kinds(events):
 
 async def test_adapter_with_vad_emits_agent_speech_events():
     # With a VAD, the receive path marks the agent's speech boundaries on the turn.
-    from ata.voice.vad import VadState
+    from agentspect.voice.vad import VadState
 
     conn = FakeConnection([_EOS, _audio_frame("a"), _audio_frame("b"), _EOS])
     adapter = VoiceWebSocketAdapter(
@@ -645,7 +645,7 @@ async def test_send_turn_accepts_a_token_stream():
 
 class _FakeStreamLLM:
     async def chat(self, messages, **kwargs):
-        from ata.llm.client import LLMResponse
+        from agentspect.llm.client import LLMResponse
 
         return LLMResponse(content="full message")
 
@@ -678,8 +678,8 @@ class _RecordingAdapter(ProtocolAdapter):
 
 
 async def test_user_simulator_streams_tokens_to_streaming_adapter():
-    from ata.agents.user_simulator import _run_single_scenario
-    from ata.models.world_state import WorldState
+    from agentspect.agents.user_simulator import _run_single_scenario
+    from agentspect.models.world_state import WorldState
 
     scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["hi", "again"])
     adapter = _RecordingAdapter()
@@ -708,7 +708,7 @@ async def test_transcribe_stream_default_is_batch_backed():
 
 
 async def test_adapter_builds_response_from_streaming_stt_partials():
-    from ata.voice.client import TranscriptionResult
+    from agentspect.voice.client import TranscriptionResult
 
     class _StreamingVoiceIO(VoiceIO):
         async def transcribe_stream(self, audio_chunks):

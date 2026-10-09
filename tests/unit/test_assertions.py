@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from ata.models.suite import (
+from agentspect.models.suite import (
     Assertion,
     BehavioralAssertion,
     Scenario,

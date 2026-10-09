@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from ata.llm.client import (
+from agentspect.llm.client import (
     AnthropicClient,
     GoogleClient,
     LLMResponse,

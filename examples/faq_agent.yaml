@@ -3,7 +3,7 @@
 # Demonstrates a read-only agent: the catalog holds the finite set of
 # question/answer pairs it may draw on, and the constraints keep it from
 # inventing answers or going out of scope. Because nothing here mutates
-# world_state, ATA cannot fire verification probes, so successful positive
+# world_state, Agentspect cannot fire verification probes, so successful positive
 # scenarios land as SUCCESS_UNVERIFIED rather than SUCCESS.
 #
 # Negative scenarios come from stepping just outside the catalog (a policy

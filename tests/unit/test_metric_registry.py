@@ -1,14 +1,14 @@
 import pytest
 
-from ata.metrics import (
+from agentspect.metrics import (
     Metric,
     MetricContext,
     MetricEngine,
     MetricRegistry,
     compute_metrics,
 )
-from ata.models.suite import Scenario, ScenarioType, ScenarioVerdict, Verdict
-from ata.models.transcript import Transcript, Turn
+from agentspect.models.suite import Scenario, ScenarioType, ScenarioVerdict, Verdict
+from agentspect.models.transcript import Transcript, Turn
 
 
 def _scenario(sid: str, stype: str = "positive") -> Scenario:

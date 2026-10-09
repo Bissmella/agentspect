@@ -1,7 +1,7 @@
 import pytest
 
-from ata.models.suite import Scenario, ScenarioType, ScenarioVerdict, Verdict
-from ata.services.dag import build_dag, cascade_skip, topological_batches
+from agentspect.models.suite import Scenario, ScenarioType, ScenarioVerdict, Verdict
+from agentspect.services.dag import build_dag, cascade_skip, topological_batches
 
 
 def make_scenario(id: str, depends_on: str | None = None) -> Scenario:

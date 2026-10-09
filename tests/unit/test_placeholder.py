@@ -1,6 +1,6 @@
 import pytest
 
-from ata.services.placeholder import (
+from agentspect.services.placeholder import (
     PlaceholderResolutionError,
     extract_placeholders,
     resolve_placeholders,

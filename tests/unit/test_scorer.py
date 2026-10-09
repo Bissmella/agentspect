@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import UTC, datetime
 
-from ata.agents.scorer import (
+from agentspect.agents.scorer import (
     ScorerAgent,
     scorer_node,
     _evaluate_world_state_assertion_deterministic,
@@ -10,8 +10,8 @@ from ata.agents.scorer import (
     AssertionResult,
     RecoveryClassification,
 )
-from ata.agents.state import ATAGraphState
-from ata.models.suite import (
+from agentspect.agents.state import ATAGraphState
+from agentspect.models.suite import (
     BehavioralAssertion,
     DependsOnType,
     Scenario,
@@ -20,8 +20,8 @@ from ata.models.suite import (
     Verdict,
     WorldStateAssertion,
 )
-from ata.models.transcript import Transcript, Turn
-from ata.models.world_state import WorldState
+from agentspect.models.transcript import Transcript, Turn
+from agentspect.models.world_state import WorldState
 
 
 @pytest.fixture

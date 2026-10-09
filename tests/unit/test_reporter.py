@@ -2,17 +2,17 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import UTC, datetime
 
-from ata.agents.reporter import ReporterAgent, reporter_node, FailureAnalysis
-from ata.agents.state import ATAGraphState
-from ata.models.suite import (
+from agentspect.agents.reporter import ReporterAgent, reporter_node, FailureAnalysis
+from agentspect.agents.state import ATAGraphState
+from agentspect.models.suite import (
     DependsOnType,
     Scenario,
     ScenarioType,
     ScenarioVerdict,
     Verdict,
 )
-from ata.models.transcript import Transcript, Turn
-from ata.models.yaml_input import AgentUnderTest, WorldStateInput
+from agentspect.models.transcript import Transcript, Turn
+from agentspect.models.yaml_input import AgentUnderTest, WorldStateInput
 
 
 @pytest.fixture

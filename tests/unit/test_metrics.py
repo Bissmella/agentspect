@@ -1,7 +1,7 @@
 import pytest
 from datetime import UTC, datetime
 
-from ata.metrics import (
+from agentspect.metrics import (
     compute_all_metrics,
     compute_boundary_adherence,
     compute_constraint_violations,
@@ -10,7 +10,7 @@ from ata.metrics import (
     compute_task_completion,
     compute_verification_rate,
 )
-from ata.models.suite import (
+from agentspect.models.suite import (
     BehavioralAssertion,
     DependsOnType,
     Scenario,
@@ -18,7 +18,7 @@ from ata.models.suite import (
     ScenarioVerdict,
     Verdict,
 )
-from ata.models.transcript import Transcript, Turn
+from agentspect.models.transcript import Transcript, Turn
 
 
 def _scenario(id, type, **kwargs):

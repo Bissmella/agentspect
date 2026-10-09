@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from ata.agents.orchestrator import (
+from agentspect.agents.orchestrator import (
     OrchestratorAgent,
     build_graph,
     _initialize_state,
@@ -10,10 +10,10 @@ from ata.agents.orchestrator import (
     _should_continue_after_generate,
     _should_continue_after_prepare,
 )
-from ata.agents.state import ATAGraphState
-from ata.models.suite import Scenario, ScenarioType
-from ata.models.world_state import WorldState
-from ata.models.yaml_input import (
+from agentspect.agents.state import ATAGraphState
+from agentspect.models.suite import Scenario, ScenarioType
+from agentspect.models.world_state import WorldState
+from agentspect.models.yaml_input import (
     AgentUnderTest,
     LLMConfig,
     TestConfig,
@@ -214,8 +214,8 @@ class TestBuildGraph:
 class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_orchestrator_initialize(self, valid_yaml):
-        with patch("ata.agents.orchestrator.create_llm_client") as mock_create_llm, \
-             patch("ata.agents.orchestrator.create_adapter") as mock_create_adapter:
+        with patch("agentspect.agents.orchestrator.create_llm_client") as mock_create_llm, \
+             patch("agentspect.agents.orchestrator.create_adapter") as mock_create_adapter:
 
             mock_create_llm.return_value = MagicMock()
             mock_create_adapter.return_value = MagicMock()
@@ -245,8 +245,8 @@ class TestOrchestratorAgent:
         def callback(event, data):
             progress_events.append((event, data))
 
-        with patch("ata.agents.orchestrator.create_llm_client") as mock_create_llm, \
-             patch("ata.agents.orchestrator.create_adapter") as mock_create_adapter:
+        with patch("agentspect.agents.orchestrator.create_llm_client") as mock_create_llm, \
+             patch("agentspect.agents.orchestrator.create_adapter") as mock_create_adapter:
 
             mock_create_llm.return_value = MagicMock()
             mock_create_adapter.return_value = MagicMock()

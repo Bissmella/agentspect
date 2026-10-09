@@ -1,10 +1,10 @@
 import pytest
 
-from ata.agents.state import ATAGraphState
-from ata.models.suite import Scenario, ScenarioType, ScenarioVerdict, Verdict
-from ata.models.transcript import Transcript
-from ata.models.world_state import WorldState
-from ata.models.yaml_input import AgentUnderTest, LLMConfig, TestConfig, WorldStateInput
+from agentspect.agents.state import ATAGraphState
+from agentspect.models.suite import Scenario, ScenarioType, ScenarioVerdict, Verdict
+from agentspect.models.transcript import Transcript
+from agentspect.models.world_state import WorldState
+from agentspect.models.yaml_input import AgentUnderTest, LLMConfig, TestConfig, WorldStateInput
 
 
 def test_state_can_be_created_empty():

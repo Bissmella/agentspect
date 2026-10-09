@@ -1,17 +1,17 @@
-"""Toy voice agent that speaks the ATA voice-WS protocol.
+"""Toy voice agent that speaks the Agentspect voice-WS protocol.
 
 A minimal, dependency-light target so the voice channel is runnable end to end.
 It greets on connect, then parrots back whatever audio it receives — enough to
-demonstrate the wire protocol and ATA's greeting capture + turn round-trip.
+demonstrate the wire protocol and Agentspect's greeting capture + turn round-trip.
 
     python examples/voice_echo_agent.py    # serves ws://localhost:8765
 
-Wire protocol (see ata/adapters/voice_ws_adapter.py):
-    ATA  -> agent:  {"type": "audio", "data": "<base64>", "format": "wav"}
-    agent-> ATA:    {"type": "audio", "data": "<base64>"}
-    agent-> ATA:    {"type": "end_of_speech"}
+Wire protocol (see agentspect/adapters/voice_ws_adapter.py):
+    Agentspect  -> agent:  {"type": "audio", "data": "<base64>", "format": "wav"}
+    agent-> Agentspect:    {"type": "audio", "data": "<base64>"}
+    agent-> Agentspect:    {"type": "end_of_speech"}
 
-Note: a *meaningful* transcript still needs STT/TTS keys on the ATA side (the
+Note: a *meaningful* transcript still needs STT/TTS keys on the Agentspect side (the
 agent here just echoes audio bytes). This target's job is to exercise the
 protocol, not to be a real booking bot.
 """

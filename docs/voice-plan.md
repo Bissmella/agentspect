@@ -1,6 +1,6 @@
 # Voice channel — implementation plan
 
-> Working plan for adding voice-agent support to the OSS `ata` library.
+> Working plan for adding voice-agent support to the OSS `agentspect` library.
 > Scope of this plan: the **thin** foundation (STT/TTS I/O + telemetry capture),
 > engineered so the **thick** layer (voice-behaviour metrics) bolts on with no
 > rewrite. Thick metrics, adversarial audio, and real telephony are explicitly
@@ -11,9 +11,9 @@
 ## Status (branch `feat/voice-channel`)
 
 - ✅ **Phase 0** — `VoiceMeta` on `Turn`, `opening_utterance`/`opening_voice` on `Transcript` (additive).
-- ✅ **Phase 1** — `ata/voice/` package: `STTClient`/`TTSClient` + `VoiceIO`, `register_stt`/`register_tts` registry, OpenAI reference provider. Pipecat bridge is **scaffolded** (guarded lazy import; batch↔frame glue is a follow-up).
+- ✅ **Phase 1** — `agentspect/voice/` package: `STTClient`/`TTSClient` + `VoiceIO`, `register_stt`/`register_tts` registry, OpenAI reference provider. Pipecat bridge is **scaffolded** (guarded lazy import; batch↔frame glue is a follow-up).
 - ✅ **Phase 2** — `VoiceWebSocketAdapter`: greeting capture, TTS→send→collect→STT round-trip, `end_of_speech`/timeout endpointing, `VoiceMeta` telemetry.
-- ✅ **Phase 3** — YAML `voice` block + `voice_websocket` protocol, `create_adapter` routing, orchestrator wiring, `ata[pipecat]` extra, `examples/voice_agent.yaml` + `examples/voice_echo_agent.py` toy target.
+- ✅ **Phase 3** — YAML `voice` block + `voice_websocket` protocol, `create_adapter` routing, orchestrator wiring, `agentspect[pipecat]` extra, `examples/voice_agent.yaml` + `examples/voice_echo_agent.py` toy target.
 - ✅ **Phase 4** — `TimeToFirstAudioMetric` proof metric + `tests/unit/test_voice.py` (13 tests, full suite 243 green).
 - ⏭️ **Follow-ups:** finish the Pipecat bridge (batch↔frame + provider auto-construction); the three open questions below; then the thick metrics — planned in `thick-plan.md`.
 
@@ -22,7 +22,7 @@
 ## Guiding decisions (settled in discussion)
 
 1. **Black-box, unchanged premise.** The agent under test may be a chained
-   pipeline (STT→LLM→TTS) or a speech-native model (Moshi / realtime). ATA neither
+   pipeline (STT→LLM→TTS) or a speech-native model (Moshi / realtime). Agentspect neither
    knows nor cares — audio in, audio out.
 2. **Thin first.** Thin = STT (agent audio → text) + TTS (user text → audio) around
    the *existing text core*. ScenarioGenerator, world_state and the verdict flow
@@ -76,7 +76,7 @@ class VoiceMeta(BaseModel):          # all fields optional
     interrupted: bool | None = None              # placeholder for thick barge-in
     dtmf: str | None = None
     stt_confidence: float | None = None
-    voice: str | None = None                     # which TTS voice ATA spoke with
+    voice: str | None = None                     # which TTS voice Agentspect spoke with
     accent: str | None = None
     language: str | None = None
     audio_ref: str | None = None                 # blob key for recorded audio
@@ -105,16 +105,16 @@ vs. a synthetic user_message="" turn — field chosen to avoid polluting turn co
 
 ## STT/TTS providers — registry + reference + optional bridge (Phase 1)
 
-ATA does **not** own the STT/TTS provider matrix (dozens of providers, churning
+Agentspect does **not** own the STT/TTS provider matrix (dozens of providers, churning
 list). Because **thin** needs only batch request/response — `synthesize(text)->
 audio`, `transcribe(audio)->text+confidence` — a provider is ~30 lines. So the
 strategy is: define one contract, make BYO trivial, ship one reference, and reach
 the long tail through Pipecat rather than re-wrapping it.
 
-New package `ata/voice/`:
+New package `agentspect/voice/`:
 
 ```
-ata/voice/
+agentspect/voice/
   __init__.py
   client.py        # VoiceClient protocol: transcribe / synthesize
   registry.py      # @register — mirrors metrics/registry.py & the adapter registry
@@ -129,19 +129,19 @@ ata/voice/
 - **Reference provider: OpenAI** — Whisper STT + TTS, no new heavy dep.
 - **BYO provider:** subclass `VoiceClient` and `@register` it — the same pattern
   users already have for metrics and adapters.
-- **Optional Pipecat bridge** (`pip install ata[pipecat]`, never a core dep): one
+- **Optional Pipecat bridge** (`pip install agentspect[pipecat]`, never a core dep): one
   adapter exposing Pipecat's STT/TTS services as a `VoiceClient`, buying dozens of
   providers *maintained upstream* — and Pipecat also supplies VAD/endpointing
   (see Phase 2).
 - `voice` / `language` / `accent` are passed through **opaquely** as
-  provider-specific strings — ATA does not normalize voice IDs across providers.
+  provider-specific strings — Agentspect does not normalize voice IDs across providers.
 - Keys via env (`OPENAI_API_KEY`, etc.), never in YAML — same rule as LLM.
 
 ---
 
 ## Voice WS adapter (Phase 2 — the core work)
 
-`ata/adapters/voice_ws_adapter.py`, subclass of `ProtocolAdapter`. Keeps the
+`agentspect/adapters/voice_ws_adapter.py`, subclass of `ProtocolAdapter`. Keeps the
 lockstep `send_turn(session_id, text) -> Turn` contract for thin:
 
 - `start_session`: open the audio WS; capture the agent's **opening greeting**
@@ -218,7 +218,7 @@ captured above — no rewrite of Phase 0–4:
 
 ## Settled
 - Reference provider: **OpenAI** (Whisper STT + TTS; already a dependency).
-- Long-tail providers + VAD: **optional Pipecat bridge** (`ata[pipecat]`), not core.
+- Long-tail providers + VAD: **optional Pipecat bridge** (`agentspect[pipecat]`), not core.
 
 ## Open questions to confirm before coding
 

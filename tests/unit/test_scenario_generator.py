@@ -1,16 +1,16 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from ata.agents.scenario_generator import (
+from agentspect.agents.scenario_generator import (
     ScenarioGeneratorAgent,
     scenario_generator_node,
     GeneratedScenarios,
     GeneratedScenario,
     GeneratedAssertion,
 )
-from ata.agents.state import ATAGraphState
-from ata.models.suite import ScenarioType
-from ata.models.yaml_input import AgentUnderTest, LLMConfig, TestConfig, WorldStateInput
+from agentspect.agents.state import ATAGraphState
+from agentspect.models.suite import ScenarioType
+from agentspect.models.yaml_input import AgentUnderTest, LLMConfig, TestConfig, WorldStateInput
 
 
 @pytest.fixture

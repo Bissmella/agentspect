@@ -2,12 +2,12 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import UTC, datetime
 
-from ata.agents.user_simulator import UserSimulatorAgent, user_simulator_node
-from ata.agents.state import ATAGraphState
-from ata.llm.client import LLMResponse
-from ata.models.suite import Scenario, ScenarioType
-from ata.models.transcript import Turn
-from ata.models.world_state import WorldState
+from agentspect.agents.user_simulator import UserSimulatorAgent, user_simulator_node
+from agentspect.agents.state import ATAGraphState
+from agentspect.llm.client import LLMResponse
+from agentspect.models.suite import Scenario, ScenarioType
+from agentspect.models.transcript import Turn
+from agentspect.models.world_state import WorldState
 
 
 @pytest.fixture
@@ -61,7 +61,7 @@ def mock_llm_client():
 async def test_user_simulator_basic_flow(
     sample_world_state, sample_scenario, mock_adapter, mock_llm_client
 ):
-    from ata.models.transcript import Transcript
+    from agentspect.models.transcript import Transcript
 
     mock_adapter.create_transcript.return_value = Transcript(
         scenario_id="test-scenario",
@@ -109,7 +109,7 @@ async def test_user_simulator_skips_skipped_scenarios(
 async def test_user_simulator_connection_error(
     sample_world_state, sample_scenario, mock_adapter, mock_llm_client
 ):
-    from ata.models.suite import Verdict
+    from agentspect.models.suite import Verdict
 
     mock_adapter.start_session = AsyncMock(
         side_effect=ConnectionError("Failed to connect")
@@ -133,8 +133,8 @@ async def test_user_simulator_connection_error(
 async def test_user_simulator_turn_error(
     sample_world_state, sample_scenario, mock_adapter, mock_llm_client
 ):
-    from ata.models.transcript import Transcript
-    from ata.models.suite import Verdict
+    from agentspect.models.transcript import Transcript
+    from agentspect.models.suite import Verdict
 
     mock_adapter.create_transcript.return_value = Transcript(
         scenario_id="test-scenario",
@@ -170,8 +170,8 @@ async def test_user_simulator_turn_error(
 async def test_user_simulator_placeholder_resolution_error(
     sample_world_state, mock_adapter, mock_llm_client
 ):
-    from ata.models.transcript import Transcript
-    from ata.models.suite import Verdict
+    from agentspect.models.transcript import Transcript
+    from agentspect.models.suite import Verdict
 
     bad_scenario = Scenario(
         id="bad-scenario",
@@ -206,7 +206,7 @@ async def test_user_simulator_placeholder_resolution_error(
 async def test_user_simulator_multiple_scenarios_parallel(
     sample_world_state, mock_adapter, mock_llm_client
 ):
-    from ata.models.transcript import Transcript
+    from agentspect.models.transcript import Transcript
 
     scenarios = [
         Scenario(
@@ -245,7 +245,7 @@ async def test_user_simulator_multiple_scenarios_parallel(
 async def test_user_simulator_agent_class(
     sample_world_state, sample_scenario, mock_adapter, mock_llm_client
 ):
-    from ata.models.transcript import Transcript
+    from agentspect.models.transcript import Transcript
 
     mock_adapter.create_transcript.return_value = Transcript(
         scenario_id="test-scenario",

@@ -1,15 +1,15 @@
-# Voice-agent example — ATA drives the conversation over the voice channel.
+# Voice-agent example — Agentspect drives the conversation over the voice channel.
 #
-# ATA synthesizes the user's turns to speech, sends them to the agent over a
+# Agentspect synthesizes the user's turns to speech, sends them to the agent over a
 # WebSocket, transcribes the agent's spoken replies, and evaluates them exactly
 # like a text run — plus voice telemetry (see the `voice` block).
 #
 # To try it against the bundled toy target:
 #   1. export OPENAI_API_KEY=...          # STT/TTS use the OpenAI reference provider
 #   2. python examples/voice_echo_agent.py    # serves ws://localhost:8765
-#   3. run this suite with the ATA engine
+#   3. run this suite with the Agentspect engine
 #
-# The long tail of STT/TTS providers is reachable via `pip install "ata[pipecat]"`.
+# The long tail of STT/TTS providers is reachable via `pip install "agentspect[pipecat]"`.
 
 agent_under_test:
   name: "Voice Booking Assistant"
@@ -55,7 +55,7 @@ llm_config:
 # Voice channel configuration. STT/TTS keys come from the environment, never here.
 voice:
   stt:
-    provider: openai        # reference provider; register your own or use ata[pipecat]
+    provider: openai        # reference provider; register your own or use agentspect[pipecat]
     model: whisper-1
   tts:
     provider: openai

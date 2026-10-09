@@ -2,15 +2,15 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import UTC, datetime
 
-from ata.agents.world_state_patcher import (
+from agentspect.agents.world_state_patcher import (
     WorldStatePatcherAgent,
     world_state_patcher_node,
 )
-from ata.agents.state import ATAGraphState
-from ata.llm.client import LLMResponse
-from ata.models.suite import Scenario, ScenarioType, ScenarioVerdict, Verdict
-from ata.models.transcript import Transcript, Turn
-from ata.models.world_state import WorldState
+from agentspect.agents.state import ATAGraphState
+from agentspect.llm.client import LLMResponse
+from agentspect.models.suite import Scenario, ScenarioType, ScenarioVerdict, Verdict
+from agentspect.models.transcript import Transcript, Turn
+from agentspect.models.world_state import WorldState
 
 
 @pytest.fixture

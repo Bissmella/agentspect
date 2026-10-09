@@ -17,14 +17,14 @@
 - ✅ **Stage B3 schema** — `VoiceAction`/`VoiceActionType` + `Scenario.voice_actions`
   (additive, validated). Generator + `voice_behavior` assertion still to do.
 - ✅ **Pipecat VAD API verified** — `SileroVADAnalyzer.analyze_audio(pcm) -> VADState`,
-  standalone, `pipecat-ai[silero]`, local CPU. Only the VAD analyzer is used (ATA is
+  standalone, `pipecat-ai[silero]`, local CPU. Only the VAD analyzer is used (Agentspect is
   the caller, not a bot). Extra updated to `pipecat-ai[silero]`.
 - ✅ **B2 event timeline** — `VoiceEvent`/`VoiceEventKind`, carried **per-turn** on
   `Turn.voice_events`; `Transcript.voice_events` is a derived property (flattens
   turns). So the timeline flows through `send_turn`'s return — no extra adapter
   method.
 - ✅ **B1 reworked into a concurrent streaming mixin (issues #8–11).** Standalone
-  `DuplexVoiceSession` deleted. `VoiceDuplexMixin` (`ata/adapters/voice_duplex_mixin.py`),
+  `DuplexVoiceSession` deleted. `VoiceDuplexMixin` (`agentspect/adapters/voice_duplex_mixin.py`),
   mixed into `voice_ws_adapter`, exposes **only `send_turn`** and runs **two
   concurrent activities**: outbound (token stream → `voice_io.synthesize_stream` →
   `asyncio.Queue` → frames sent as produced; `ATA_SPEECH_START` at first frame sent)
@@ -42,7 +42,7 @@
   - Only the *codec implementations* stay batch-backed behind these interfaces
     (`synthesize_stream` word-buffers via batch TTS; `transcribe_stream` default
     transcribes once). The real **Pipecat streaming TTS/STT** drop in behind
-    `VoiceIO` — deferred to an env with `ata[pipecat]` + provider keys, since
+    `VoiceIO` — deferred to an env with `agentspect[pipecat]` + provider keys, since
     Pipecat's STT/TTS services need pipeline `setup()` and can't be built/validated
     in this repo. Tested here with batch + fake-streaming `VoiceIO`.
 - ⏭️ **Deferred, by decision:**
@@ -55,7 +55,7 @@
     the hood, so latency isn't reduced yet — these drop in behind `VoiceIO`.
 - ⏭️ **Next (not deferred):** **B4 observational metrics** over the per-turn events +
   `VoiceMeta` (dead-air and agent-speech already shipped; add VAD-based ones), and
-  wiring the voice adapter's VAD into `create_adapter` when `ata[pipecat]` is present.
+  wiring the voice adapter's VAD into `create_adapter` when `agentspect[pipecat]` is present.
 
 ---
 
@@ -76,18 +76,18 @@ read that. Same lesson as Phase 0, one layer down. The reserved `VoiceMeta` fiel
 - **Two stages, A before B.** A front-loads the tractable metrics and builds the
   timestamp foundation; B isolates the hard duplex work.
 - **Substrate: Pipecat for Stage B — but only its VAD analyzer** (verified, see
-  Status). ATA is the *caller*, not a bot, so Pipecat's pipeline/transport/
-  interruption machinery is irrelevant; the single piece ATA needs is
+  Status). Agentspect is the *caller*, not a bot, so Pipecat's pipeline/transport/
+  interruption machinery is irrelevant; the single piece Agentspect needs is
   `SileroVADAnalyzer` (standalone `await analyze_audio(pcm) -> VADState`, local CPU).
-  Duplex orchestration, barge-in injection timing, and the transport stay ATA's own
+  Duplex orchestration, barge-in injection timing, and the transport stay Agentspect's own
   (over the existing WS); content STT/TTS stays thin's batch `VoiceIO`. Consequence:
-  **thick is gated on the `ata[pipecat]` extra (= `pipecat-ai[silero]`); it is one
+  **thick is gated on the `agentspect[pipecat]` extra (= `pipecat-ai[silero]`); it is one
   guarded import of one class; thin stays fully functional without it.**
 - **Deterministic tester.** Scripted, timed adversarial actions — not a neural
   speech-to-speech simulator. Timing is "≈T ± tolerance" (real audio has jitter).
 - **Transport-neutral.** Capture and metrics stay protocol-agnostic so the
   platform's telephony adapter reuses them.
-- **Audio is just a channel — the text core stays primary (guardrail).** ATA must
+- **Audio is just a channel — the text core stays primary (guardrail).** Agentspect must
   never become audio-first. The text core (models, scorer, verdicts, metrics
   engine, user-simulator loop) is transport-agnostic; voice lives entirely behind
   the `ProtocolAdapter` seam with `VoiceMeta`/events as optional fields. Thick's
@@ -131,17 +131,17 @@ loop structured so Stage B can hang injection events off the same timeline.
 
 ## Stage B — duplex + scripted adversarial actions (the hard part)
 
-Needs ATA to act at a precise moment relative to the agent's audio. Four sub-parts,
+Needs Agentspect to act at a precise moment relative to the agent's audio. Four sub-parts,
 each with a real design question.
 
-### B1. Duplex session model (ATA's own, VAD from Pipecat)
+### B1. Duplex session model (Agentspect's own, VAD from Pipecat)
 A new execution path *alongside* `send_turn` — the lockstep contract can't do
 overlap. A `DuplexVoiceSession` runs two concurrent asyncio tasks over the existing
-WS: one streams ATA's (batch-TTS'd) audio out, one reads the agent's audio in and
+WS: one streams Agentspect's (batch-TTS'd) audio out, one reads the agent's audio in and
 feeds it to `SileroVADAnalyzer.analyze_audio` to mark the agent's speech
 start/stop. A timed action (e.g. `barge_in_at_ms`) schedules *when* the outbound
-task starts — ATA controls its own injection; no Pipecat transport/interruption.
-- Audio format: VAD needs 16 kHz mono 16-bit PCM in 512-sample frames → ATA must
+task starts — Agentspect controls its own injection; no Pipecat transport/interruption.
+- Audio format: VAD needs 16 kHz mono 16-bit PCM in 512-sample frames → Agentspect must
   buffer/resample inbound audio to that. Target audio format is a real integration
   detail (flag in risks).
 - The orchestrator/user-simulator needs a duplex run branch for voice scenarios
@@ -152,7 +152,7 @@ Injection events don't exist without injection, so this is genuinely new capture
 Add a `voice_events` list (`{t_ms, kind, party}`, kind ∈ `speech_start`,
 `speech_end`, `silence`, `barge_in_injected`, `dtmf_sent`, `agent_yielded`).
 Agent `speech_start`/`speech_end` come from `VADState` transitions
-(`QUIET→SPEAKING`, `SPEAKING→QUIET`); injection events are stamped by ATA. Metrics
+(`QUIET→SPEAKING`, `SPEAKING→QUIET`); injection events are stamped by Agentspect. Metrics
 compute over the timeline.
 
 ### B3. Scenario schema + generator
@@ -183,8 +183,8 @@ scorer.
   standalone, `pipecat-ai[silero]`, local CPU. (The pipeline/interruption layer is
   not used.)
 - **Audio format** is the new real integration detail: VAD needs 16 kHz mono 16-bit
-  PCM in 512-sample frames; the agent's inbound audio may be any format → ATA
-  buffers/resamples. Decide how ATA learns the target's audio format (config vs.
+  PCM in 512-sample frames; the agent's inbound audio may be any format → Agentspect
+  buffers/resamples. Decide how Agentspect learns the target's audio format (config vs.
   sniff).
 - Timing-dependent tests are flaky by nature → the fake transport + simulated clock
   (and a fake VAD returning scripted states) are the only way to test B reliably.

@@ -1,7 +1,7 @@
 import pytest
 
-from ata.adapters.callable_adapter import CallableAdapter, _accepts_history
-from ata.agents.orchestrator import OrchestratorAgent
+from agentspect.adapters.callable_adapter import CallableAdapter, _accepts_history
+from agentspect.agents.orchestrator import OrchestratorAgent
 
 _CALLABLE_YAML = """
 agent_under_test:

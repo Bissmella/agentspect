@@ -1,8 +1,8 @@
 # Example: an appointment-booking assistant (WebSocket).
 #
 # Demonstrates a stateful agent with entities (customers), a catalog of
-# bookable slots, and constraints ATA can deliberately cross to generate
-# negative scenarios. Because bookings mutate world_state, ATA will also
+# bookable slots, and constraints Agentspect can deliberately cross to generate
+# negative scenarios. Because bookings mutate world_state, Agentspect will also
 # generate probe scenarios to verify that a booked slot actually persisted.
 #
 # Run it from the UI (paste this file into "New Run") or via the API:

@@ -1,6 +1,6 @@
 import pytest
 
-from ata.services.yaml_parser import YAMLValidationError, parse_and_validate
+from agentspect.services.yaml_parser import YAMLValidationError, parse_and_validate
 
 
 def test_parse_valid_yaml(valid_yaml):

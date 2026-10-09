@@ -1,18 +1,18 @@
-# ATA — Agent Testing Agent
+# Agentspect — Agent Testing Agent
 
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
-**Playwright for conversational agents.** ATA is a black-box, **outside-in** testing
-framework for conversational agents. You describe your agent's world in a YAML file; ATA
+**Playwright for conversational agents.** Agentspect is a black-box, **outside-in** testing
+framework for conversational agents. You describe your agent's world in a YAML file; Agentspect
 **writes the tests for you**, holds real conversations with the agent over its actual
 interface — HTTP, WebSocket, or a plain Python callable — and reports, quantitatively,
 how it behaved.
 
 No access to the agent's source, prompts, or internals is required. Unlike
-instrumentation-based eval tools, ATA never wraps your agent in decorators or SDKs — it
-only ever observes what goes in and what comes out. ATA is itself an agent: a system of
+instrumentation-based eval tools, Agentspect never wraps your agent in decorators or SDKs — it
+only ever observes what goes in and what comes out. Agentspect is itself an agent: a system of
 six coordinated LLM agents orchestrated with LangGraph, testing your agent from the outside.
 
 
@@ -20,7 +20,7 @@ six coordinated LLM agents orchestrated with LangGraph, testing your agent from 
 
 ## Contents
 
-- [Why ATA](#why-ata)
+- [Why Agentspect](#why-agentspect)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Core concepts](#core-concepts)
@@ -37,13 +37,13 @@ six coordinated LLM agents orchestrated with LangGraph, testing your agent from 
 - [Development](#development)
 - [Project layout](#project-layout)
 - [Roadmap](#roadmap)
-- [What ATA is not](#what-ata-is-not)
+- [What Agentspect is not](#what-agentspect-is-not)
 - [Contributing](#contributing)
 - [License](#license)
 
 ---
 
-## Why ATA
+## Why Agentspect
 
 Most agent-eval tools score single prompt/response pairs, or require you to instrument
 your agent's internals. Real agents fail in ways that only show up over a *conversation*
@@ -51,7 +51,7 @@ and only from the *outside*: they double-book a slot, confidently claim they did
 something they didn't, leak internal data while refusing, or accept a request they should
 have declined.
 
-ATA is built for exactly that. You give it a description of the world your agent operates
+Agentspect is built for exactly that. You give it a description of the world your agent operates
 in — who it knows, what it can offer, the rules it must follow — and it:
 
 - **generates** a suite of positive and negative test conversations for you,
@@ -65,12 +65,12 @@ in — who it knows, what it can offer, the rules it must follow — and it:
 ## Install
 
 ```bash
-git clone https://github.com/Bissmella/ata
-cd ata
+git clone https://github.com/Bissmella/agentspect
+cd agentspect
 uv sync                  # or:  pip install -e .
 ```
 
-Requires Python 3.12+. Set the API key for whichever provider drives ATA:
+Requires Python 3.12+. Set the API key for whichever provider drives Agentspect:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...    # or OPENAI_API_KEY / GOOGLE_API_KEY / OPENROUTER_API_KEY
@@ -85,7 +85,7 @@ complete ones), then run it:
 
 ```python
 import asyncio
-from ata import run_suite
+from agentspect import run_suite
 
 report = asyncio.run(run_suite(open("examples/booking_agent.yaml").read()))
 
@@ -100,7 +100,7 @@ render however you like.
 ### Testing a Python callable directly
 
 No server to stand up. If your agent is a Python function or object, hand it straight to
-ATA: set `protocol: callable` in the YAML (no `url` needed) and pass it as `agent=`. It
+Agentspect: set `protocol: callable` in the YAML (no `url` needed) and pass it as `agent=`. It
 may be sync or async, and accept either `(message)` or `(message, history)`, where
 `history` is the prior turns as `{"user": ..., "agent": ...}` dicts:
 
@@ -112,7 +112,7 @@ async def my_agent(message: str, history: list[dict]) -> str:
 report = asyncio.run(run_suite(open("config.yaml").read(), agent=my_agent))
 ```
 
-Still fully black-box — ATA only sees what the callable returns for each message.
+Still fully black-box — Agentspect only sees what the callable returns for each message.
 
 ---
 
@@ -120,17 +120,17 @@ Still fully black-box — ATA only sees what the callable returns for each messa
 
 ### world_state — describe, don't script
 
-You never hand-write test cases. Instead you describe the **world_state**, and ATA's
+You never hand-write test cases. Instead you describe the **world_state**, and Agentspect's
 ScenarioGeneratorAgent derives the tests from it. It has four buckets:
 
-| Bucket | Meaning | ATA uses it to… |
+| Bucket | Meaning | Agentspect uses it to… |
 |--------|---------|-----------------|
 | `entities` | Named actors the agent looks up (a customer, an account) — they have attributes. | Build personas and lookups; mutate attributes for negative identity cases. |
 | `catalog` | The finite set the agent can offer or act on (slots, SKUs, Q&A pairs). | Pick valid values for positives; step just outside the set for negatives. |
 | `constraints` | Natural-language rules that define valid behavior ("only verified entities can book"). | Deliberately cross a rule to generate a negative scenario. |
 | `context` | Read-only runtime facts (current time, language, channel). | Make scenarios realistic; injected as background. |
 
-The guiding idea: **valid is enumerated, invalid is infinite.** ATA generates negatives
+The guiding idea: **valid is enumerated, invalid is infinite.** Agentspect generates negatives
 by taking valid values and nudging them just outside the boundary, or by crossing a
 constraint — it never needs you to list "bad" inputs.
 
@@ -139,7 +139,7 @@ RFC 6902 JSON Patch), so later scenarios see what earlier ones changed.
 
 ### Verdicts & probes
 
-A run doesn't just pass or fail. ATA determines whether the conversation was a *success
+A run doesn't just pass or fail. Agentspect determines whether the conversation was a *success
 run* or *failure run*, then — crucially — **verifies persisted state by probing**: after
 a positive scenario books a slot, a probe scenario tries to book it again and should be
 refused. If the probe *succeeds*, the state never actually persisted, and the original
@@ -159,7 +159,7 @@ probe* to check whether state was corrupted.
 
 ### Assertions
 
-ATA generates three kinds of assertion per scenario (you read them in the report; you
+Agentspect generates three kinds of assertion per scenario (you read them in the report; you
 don't write them). Simple `world_state` checks are evaluated deterministically; the rest
 use the LLM:
 
@@ -223,7 +223,7 @@ hook metric that observes every turn.
 ### Writing a custom metric
 
 ```python
-from ata import Metric, register
+from agentspect import Metric, register
 
 @register
 class AvgResponseLength(Metric):
@@ -261,7 +261,7 @@ agent_under_test:
   protocol: websocket                  # http | websocket | callable
   description: "Books appointments for registered customers..."
   capabilities: [appointment booking, customer lookup]
-  known_limitations: [does not handle rescheduling]   # ATA won't test out-of-scope features
+  known_limitations: [does not handle rescheduling]   # Agentspect won't test out-of-scope features
 
 world_state:
   entities:
@@ -295,7 +295,7 @@ Validation is strict and fails fast with a clear message: `total` must equal
 
 ## Assets
 
-Don't hand-write `world_state.entities` for a data-heavy agent — point ATA at a file and
+Don't hand-write `world_state.entities` for a data-heavy agent — point Agentspect at a file and
 let it build them. Add an optional `assets:` block; an `AssetIngestionAgent` reads only a
 **bounded, spread-out sample** of the file (never the whole thing, so large files never
 reach a prompt) and turns it into world_state material before scenarios are generated.
@@ -352,7 +352,7 @@ Sources are pluggable: `csv` and `jsonl` are built in; register your own `AssetL
 ## Public API
 
 ```python
-from ata import (
+from agentspect import (
     run_suite,           # async: (yaml_str, progress_callback=None, agent=None) -> report dict
     OrchestratorAgent,   # the LangGraph pipeline, for finer control
     parse_and_validate,  # yaml_str -> (validated model, content hash)
@@ -384,8 +384,8 @@ from the YAML:
 ## Development
 
 ```bash
-git clone https://github.com/Bissmella/ata
-cd ata
+git clone https://github.com/Bissmella/agentspect
+cd agentspect
 uv sync --extra dev
 uv run pytest            # unit tests mock the LLM — no API key needed
 uv run ruff check .
@@ -396,9 +396,9 @@ uv run ruff check .
 ## Project layout
 
 ```
-ata/
+agentspect/
   models/      domain models — world_state, suite, transcript, yaml_input
-  agents/      the six ATA agents + the LangGraph orchestrator + graph state
+  agents/      the six Agentspect agents + the LangGraph orchestrator + graph state
   adapters/    HTTP, WebSocket, and in-process callable adapters (same Transcript out of each)
   assets/      pluggable file loaders (CSV/JSONL) + bounded sampling for world_state
   llm/         common LLM interface (Anthropic / OpenAI / Google / OpenRouter / Ollama)
@@ -417,15 +417,15 @@ tests/         unit tests (LLM mocked)
 - [ ] Assets: remote sources (a Databricks query, Parquet) as additional loaders
 - [ ] RAG support (the reserved `rag` key / `knowledge_base` asset role): a document
       corpus as ground truth for generating and grading grounded/out-of-scope questions
-- [ ] Publish to PyPI (`pip install ata`)
-- [ ] `ata` CLI (`ata run config.yaml`) with CI-friendly exit codes
+- [ ] Publish to PyPI (`pip install agentspect`)
+- [ ] `agentspect` CLI (`agentspect run config.yaml`) with CI-friendly exit codes
 - [ ] Standalone HTML report renderer for local runs
 - [ ] Scenario snapshot + LLM record/replay for reproducible, low-cost CI runs
 - [ ] pytest plugin and GitHub Action
 
 ---
 
-## What ATA is not
+## What Agentspect is not
 
 - Not a metric library and not an observability tool — no instrumentation, no SDK wrappers.
 - Not a load-testing tool — concurrency is for running independent suites, not hammering one agent.

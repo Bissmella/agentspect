@@ -1,6 +1,6 @@
 import pytest
 
-from ata.models.world_state import PatchValidationError, WorldState
+from agentspect.models.world_state import PatchValidationError, WorldState
 
 
 def test_snapshot(sample_world_state):
