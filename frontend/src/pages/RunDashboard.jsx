@@ -7,6 +7,7 @@ import EventTimeline from '../components/EventTimeline';
 import ScenarioCard from '../components/ScenarioCard';
 import VerdictSummary from '../components/VerdictSummary';
 import ErrorAlert from '../components/ErrorAlert';
+import Spinner from '../components/Spinner';
 
 export default function RunDashboard() {
   const { id } = useParams();
@@ -18,10 +19,7 @@ export default function RunDashboard() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <svg className="animate-spin h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-        </svg>
+        <Spinner className="h-8 w-8 text-brand-600" />
       </div>
     );
   }
@@ -51,10 +49,7 @@ export default function RunDashboard() {
             </div>
           </div>
           {(suite.status === 'completed' || completedEvent) && (
-            <Link
-              to={`/runs/${id}/report`}
-              className="inline-flex items-center px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
-            >
+            <Link to={`/runs/${id}/report`} className="btn-success">
               View Report
             </Link>
           )}

@@ -44,10 +44,6 @@ export default function YamlEditor({ value, onChange }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div
-      ref={containerRef}
-      className="border border-gray-300 rounded-lg overflow-hidden"
-      style={{ height: '500px' }}
-    />
+    <div ref={containerRef} className="overflow-hidden" style={{ height: '460px' }} />
   );
 }

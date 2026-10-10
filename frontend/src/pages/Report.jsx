@@ -4,6 +4,7 @@ import VerdictSummary from '../components/VerdictSummary';
 import MetricsDashboard from '../components/MetricsDashboard';
 import ScenarioCard from '../components/ScenarioCard';
 import ErrorAlert from '../components/ErrorAlert';
+import Spinner from '../components/Spinner';
 
 export default function Report() {
   const { id } = useParams();
@@ -14,10 +15,7 @@ export default function Report() {
   if (suiteLoading || reportLoading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <svg className="animate-spin h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-        </svg>
+        <Spinner className="h-8 w-8 text-brand-600" />
       </div>
     );
   }
@@ -26,7 +24,7 @@ export default function Report() {
     const msg = reportError.detail || 'Report not available yet.';
     return (
       <div>
-        <Link to={`/runs/${id}`} className="text-sm text-blue-600 hover:text-blue-800 mb-4 inline-block">
+        <Link to={`/runs/${id}`} className="text-sm text-brand-600 hover:text-brand-700 mb-4 inline-block">
           &larr; Back to Dashboard
         </Link>
         <ErrorAlert message={msg} />
@@ -43,7 +41,7 @@ export default function Report() {
     <div>
       {/* Header */}
       <div className="mb-6">
-        <Link to={`/runs/${id}`} className="text-sm text-blue-600 hover:text-blue-800 mb-2 inline-block">
+        <Link to={`/runs/${id}`} className="text-sm text-brand-600 hover:text-brand-700 mb-2 inline-block">
           &larr; Back to Dashboard
         </Link>
         <h1 className="text-2xl font-bold text-gray-900">
@@ -57,14 +55,14 @@ export default function Report() {
       </div>
 
       {/* Verdict summary */}
-      <div className="bg-white border border-gray-200 rounded-lg p-5 mb-6">
+      <div className="card p-5 mb-6">
         <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Verdict Summary</h2>
         <VerdictSummary verdictCounts={verdictCounts} />
       </div>
 
       {/* Quantitative metrics */}
       {summary.metrics && (
-        <div className="bg-white border border-gray-200 rounded-lg p-5 mb-6">
+        <div className="card p-5 mb-6">
           <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Quantitative Metrics</h2>
           <MetricsDashboard metrics={summary.metrics} />
         </div>
@@ -93,7 +91,7 @@ export default function Report() {
 
       {/* Probe chains */}
       {probeChains.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg p-5 mb-6">
+        <div className="card p-5 mb-6">
           <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Probe Chains</h2>
           <div className="space-y-2">
             {probeChains.map((chain, i) => (
