@@ -208,7 +208,7 @@ async def _execute_suite(suite_id_str: str, yaml_str: str) -> dict[str, Any]:
 
     publish_event(suite_id_str, "suite_running")
 
-    from backend.agents.orchestrator import OrchestratorAgent
+    from agentspect import OrchestratorAgent
 
     progress_callback = _make_progress_callback(suite_id_str)
     orchestrator = OrchestratorAgent(yaml_str, progress_callback)

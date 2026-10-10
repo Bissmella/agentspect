@@ -3,8 +3,7 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from backend.adapters.http_adapter import HTTPAdapter
-from backend.agents.orchestrator import run_suite
+from agentspect import HTTPAdapter, run_suite
 from tests.e2e.llm_mock_agent import app as agent_app
 
 
@@ -116,14 +115,14 @@ llm_config:
 # All real LLM calls. We just assert on the report shape.
 # ─────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-@patch("backend.agents.orchestrator.create_adapter")
+@patch("agentspect.agents.orchestrator.create_adapter")
 async def test_healthy_agent(mock_create_adapter, db_file):
     mock_create_adapter.return_value = InProcessHTTPAdapter(
         url="http://test/chat", app=agent_app
     )
 
     # Agent uses real LLM internally (create_llm_client is NOT patched)
-    from backend.llm.client import create_llm_client
+    from agentspect import create_llm_client
     agent_app.state.llm_client = create_llm_client("openrouter", "openai/gpt-4o-mini")
     agent_app.state.disability = None
 
@@ -156,13 +155,13 @@ async def test_healthy_agent(mock_create_adapter, db_file):
 # ATA should detect this as a failure in a positive scenario.
 # ─────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-@patch("backend.agents.orchestrator.create_adapter")
+@patch("agentspect.agents.orchestrator.create_adapter")
 async def test_agent_no_user_registration(mock_create_adapter, db_file):
     mock_create_adapter.return_value = InProcessHTTPAdapter(
         url="http://test/chat", app=agent_app
     )
 
-    from backend.llm.client import create_llm_client
+    from agentspect import create_llm_client
     agent_app.state.llm_client = create_llm_client("openrouter", "openai/gpt-4o-mini")
     agent_app.state.disability = "no_user_registration"
 

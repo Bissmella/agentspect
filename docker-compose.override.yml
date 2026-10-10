@@ -1,0 +1,6 @@
+# Local dev override: native Windows Postgres holds host :5432, so publish
+# the Docker Postgres on :5433 instead. Point DATABASE_URL at 5433 to use it.
+services:
+  postgres:
+    ports:
+      - "5433:5432"

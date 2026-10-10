@@ -24,7 +24,7 @@ from backend.schemas.run import (
     TurnResponse,
 )
 from backend.services.blob import async_download_json, create_s3_client, ensure_bucket
-from backend.services.yaml_parser import YAMLValidationError, parse_and_validate
+from agentspect import YAMLValidationError, parse_and_validate
 from backend.tasks import run_suite_task
 
 logger = logging.getLogger(__name__)

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel
 import json, os, re
-from backend.llm.client import LLMClient, create_llm_client
+from agentspect import LLMClient, create_llm_client
 
 app = FastAPI(title="LLM Mock Agent Under Test")
 

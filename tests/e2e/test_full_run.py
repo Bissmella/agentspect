@@ -66,7 +66,7 @@ pytestmark = pytest.mark.skipif(not _INFRA_READY, reason=_SKIP_REASON)
 # of any ATA logic — the orchestrator, LLM, scorer, patcher all run for real.
 # ─────────────────────────────────────────────────────────────────
 def _in_process_adapter_factory(agent_app):
-    from backend.adapters.http_adapter import HTTPAdapter
+    from agentspect import HTTPAdapter
 
     class InProcessHTTPAdapter(HTTPAdapter):
         def __init__(self, url, app):
@@ -141,7 +141,7 @@ async def db_tables():
 @pytest.fixture
 def mock_agent(tmp_path):
     from tests.e2e.llm_mock_agent import app as agent_app
-    from backend.llm.client import create_llm_client
+    from agentspect import create_llm_client
 
     db_path = tmp_path / "e2e_db.json"
     db_path.write_text(json.dumps({
@@ -200,7 +200,7 @@ async def test_full_run_end_to_end(db_tables, mock_agent, api_client):
     # 2. Run the actual task body: full orchestrator + real LLM + store to DB/S3.
     from backend import tasks
 
-    with patch("backend.agents.orchestrator.create_adapter") as orch_adapter:
+    with patch("agentspect.agents.orchestrator.create_adapter") as orch_adapter:
         orch_adapter.return_value = adapter_cls(url="http://test/chat", app=agent_app)
         await tasks._execute_suite(suite_id, TEST_YAML)
 
