@@ -13,6 +13,9 @@ celery.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # Text default floor; voice suites override per-dispatch (see main.py).
+    task_soft_time_limit=settings.task_time_limits(None)[0],
+    task_time_limit=settings.task_time_limits(None)[1],
 )
 
 celery.autodiscover_tasks(["backend"])

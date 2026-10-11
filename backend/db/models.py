@@ -47,6 +47,7 @@ class DependsOnTypeDB(str, PyEnum):
 class ProtocolDB(str, PyEnum):
     HTTP = "http"
     WEBSOCKET = "websocket"
+    VOICE_WEBSOCKET = "voice_websocket"  # engine already validates it; platform must store it
 
 
 class Suite(Base):

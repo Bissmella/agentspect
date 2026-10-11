@@ -63,6 +63,16 @@ async def create_run(
     test_cfg = yaml_input.test_config
     llm_cfg = yaml_input.llm_config
 
+    # Fail fast before enqueuing: a voice suite needs its STT/TTS provider keys.
+    if agent.protocol == "voice_websocket":
+        voice = yaml_input.voice  # validator guarantees this is set for voice
+        missing = settings.missing_voice_keys(voice.stt.provider, voice.tts.provider)
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Voice run requires provider key(s) not set: {', '.join(missing)}",
+            )
+
     suite = Suite(
         status=SuiteStatus.PENDING,
         yaml_input_hash=yaml_hash,
@@ -79,7 +89,12 @@ async def create_run(
     await db.commit()
     await db.refresh(suite)
 
-    task = run_suite_task.delay(str(suite.id), request.yaml_content)
+    soft_limit, hard_limit = settings.task_time_limits(agent.protocol)
+    task = run_suite_task.apply_async(
+        args=(str(suite.id), request.yaml_content),
+        soft_time_limit=soft_limit,
+        time_limit=hard_limit,
+    )
     suite.celery_task_id = task.id
     await db.commit()
 
@@ -227,6 +242,8 @@ async def get_transcript(
             user=t.get("user", ""),
             agent=t.get("agent", ""),
             latency_ms=t.get("latency_ms", 0),
+            voice=t.get("voice"),
+            voice_events=t.get("voice_events", []),
         )
         for t in turns_data
     ]

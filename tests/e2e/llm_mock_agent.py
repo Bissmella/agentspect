@@ -77,45 +77,42 @@ def execute_tool(name: str, args: dict, db_path: str, disability: str |None = No
 
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, req: Request, response: Response):
-    db_path = getattr(req.app.state, "db_path", "llm_agent_db.json")
-    disability = getattr(req.app.state, "disability", None)
-
-    llm_client = getattr(req.app.state, "llm_client", None) or create_llm_client("openrouter", "openai/gpt-4o-mini")
-    session_id = request.session_id or "default_session"
-
-    if not hasattr(req.app.state, "sessions"):
-        req.app.state.sessions = {}
-    if session_id not in req.app.state.sessions:
-        req.app.state.sessions[session_id] = []
-
-    session_history = req.app.state.sessions[session_id]
-    session_history.append({"role": "user", "content": request.message})
-
-    system_prompt = """
+SYSTEM_PROMPT = """
     ou are a reservation assistant. Available slots: "2026-05-20T10:00" and "2026-05-20T14:00".
     Rules:
     1. Always ask for user's phone number first.
     2. Check if user is registered using get_user.
     3. If not registered, ask for name and run create_user.
     4. Book reservation using create_reservation once you have user's phone number and the slot.
-    
+
     """
 
-    messages = [{"role": "system", "content": system_prompt}] + session_history
+TOOLS = [
+    {"name": "get_user", "description": "Lookup user", "parameters": {"type": "object", "properties": {"phone": {"type": "string"}}, "required": ["phone"]}},
+    {"name": "create_user", "description": "Add user", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "phone": {"type": "string"}}, "required": ["name", "phone"]}},
+    {"name": "create_reservation", "description": "Add booking", "parameters": {"type": "object", "properties": {"phone": {"type": "string"}, "slot": {"type": "string"}}, "required": ["phone", "slot"]}},
+]
 
-    tools = [
-        {"name": "get_user", "description": "Lookup user", "parameters": {"type": "object", "properties": {"phone": {"type": "string"}}, "required": ["phone"]}},
-        {"name": "create_user", "description": "Add user", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "phone": {"type": "string"}}, "required": ["name", "phone"]}},
-        {"name": "create_reservation", "description": "Add booking", "parameters": {"type": "object", "properties": {"phone": {"type": "string"}, "slot": {"type": "string"}}, "required": ["phone", "slot"]}}
-    ]
+
+async def run_turn(
+    llm_client: LLMClient,
+    session_history: list[dict],
+    message: str,
+    db_path: str,
+    disability: str | None = None,
+) -> str:
+    """One user turn → assistant reply. Mutates session_history in place.
+
+    Transport-agnostic so the HTTP and voice mocks share the same agent brain.
+    """
+    session_history.append({"role": "user", "content": message})
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + session_history
 
     for _ in range(5):
-        res_llm = await llm_client.chat(messages, tools=tools, temperature=0.0)
+        res_llm = await llm_client.chat(messages, tools=TOOLS, temperature=0.0)
         if not res_llm.tool_calls:
             session_history.append({"role": "assistant", "content": res_llm.content})
-            return ChatResponse(response=res_llm.content, session_id=session_id)
+            return res_llm.content
 
         openai_tool_calls = [
             {
@@ -136,4 +133,20 @@ async def chat(request: ChatRequest, req: Request, response: Response):
 
     fallback = "I was unable to complete your request after multiple attempts."
     session_history.append({"role": "assistant", "content": fallback})
-    return ChatResponse(response=fallback, session_id=session_id)
+    return fallback
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest, req: Request, response: Response):
+    db_path = getattr(req.app.state, "db_path", "llm_agent_db.json")
+    disability = getattr(req.app.state, "disability", None)
+
+    llm_client = getattr(req.app.state, "llm_client", None) or create_llm_client("openrouter", "openai/gpt-4o-mini")
+    session_id = request.session_id or "default_session"
+
+    if not hasattr(req.app.state, "sessions"):
+        req.app.state.sessions = {}
+    session_history = req.app.state.sessions.setdefault(session_id, [])
+
+    reply = await run_turn(llm_client, session_history, request.message, db_path, disability)
+    return ChatResponse(response=reply, session_id=session_id)

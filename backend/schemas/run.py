@@ -58,6 +58,8 @@ class TurnResponse(BaseModel):
     user: str
     agent: str
     latency_ms: int = 0
+    voice: dict[str, Any] | None = None       # per-turn VoiceMeta (voice runs only)
+    voice_events: list[dict[str, Any]] = Field(default_factory=list)  # duplex timeline
 
 
 class TranscriptResponse(BaseModel):

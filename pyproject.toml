@@ -16,7 +16,7 @@ dependencies = [
     "boto3>=1.35.0",
     "httpx>=0.27.0",
     "python-multipart>=0.0.12",
-    "agentspect @ git+https://github.com/Bissmella/agentspect.git",
+    "agentspect[pipecat] @ git+https://github.com/Bissmella/agentspect.git",
 ]
 
 [project.optional-dependencies]

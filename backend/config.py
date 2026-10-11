@@ -12,6 +12,14 @@ _DOCKER_HOST_MAP = {
 
 _DOCKER_FIELDS = ("database_url", "redis_url", "s3_endpoint_url", "ollama_base_url")
 
+# Voice STT/TTS provider -> (Settings attr, env var name). ollama/custom need no key.
+_PROVIDER_KEYS = {
+    "openai": ("openai_api_key", "OPENAI_API_KEY"),
+    "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+    "google": ("google_api_key", "GOOGLE_API_KEY"),
+    "openrouter": ("openrouter_api_key", "OPENROUTER_API_KEY"),
+}
+
 
 def _is_docker() -> bool:
     return Path("/.dockerenv").exists()
@@ -32,7 +40,34 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     ollama_base_url: str = "http://localhost:11434/v1"
 
+    # Celery per-suite time limits (seconds). Voice suites stream real-time audio
+    # and legitimately run for minutes, so they get a longer leash than text.
+    task_soft_time_limit: int = 1800         # text suites (prev. unbounded; generous to avoid reaping multi-scenario runs)
+    voice_task_soft_time_limit: int = 2400   # voice suites
+    task_time_limit_grace: int = 60          # hard limit = soft + grace
+
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    def task_time_limits(self, protocol: str | None) -> tuple[int, int]:
+        """(soft, hard) Celery limits in seconds for a suite's protocol."""
+        soft = (
+            self.voice_task_soft_time_limit
+            if protocol == "voice_websocket"
+            else self.task_soft_time_limit
+        )
+        return soft, soft + self.task_time_limit_grace
+
+    def missing_voice_keys(self, *providers: str) -> list[str]:
+        """Env var names required by the given STT/TTS providers that are unset.
+
+        Unknown (custom/pipecat) providers can't be validated here, so they pass.
+        """
+        missing = []
+        for prov in dict.fromkeys(providers):  # dedupe, keep order
+            entry = _PROVIDER_KEYS.get(prov)
+            if entry and not getattr(self, entry[0]):
+                missing.append(entry[1])
+        return missing
 
     @model_validator(mode="after")
     def _resolve_docker_urls(self):
