@@ -235,6 +235,22 @@ async def test_adapter_missing_greeting_is_not_an_error():
     await adapter.close()
 
 
+# ── Injectable connection (host-supplied, no network hop) ─────────────────────────
+
+async def test_voice_callable_adapter_runs_duplex_over_host_connection():
+    from agentspect.adapters import VoiceCallableAdapter
+
+    conn = FakeConnection([_EOS, _audio_frame("You are booked."), _EOS])
+    adapter = VoiceCallableAdapter(lambda: conn, voice_io=_fake_voice_io(), timeout=5.0)
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "I'd like slot A")
+    assert turn.error is None
+    assert turn.agent_response == "You are booked."
+    assert conn.sent  # ATA's audio reached the host-supplied connection
+    await adapter.close()
+    assert conn.closed
+
+
 # ── Wiring ───────────────────────────────────────────────────────────────────────
 
 def test_create_adapter_routes_voice_websocket():
