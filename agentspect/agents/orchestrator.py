@@ -197,11 +197,13 @@ class OrchestratorAgent:
         progress_callback: ProgressCallback | None = None,
         agent: AgentCallable | None = None,
         base_dir: str | None = None,
+        adapter: ProtocolAdapter | None = None,
     ):
         self.yaml_str = yaml_str
         self.progress_callback = progress_callback
         self._agent = agent
         self._base_dir = base_dir
+        self._adapter_override = adapter
         self._graph = None
         self._llm_client: LLMClient | None = None
         self._adapter: ProtocolAdapter | None = None
@@ -251,7 +253,11 @@ class OrchestratorAgent:
         agent_config = yaml_input.agent_under_test
         use_callable = self._agent is not None or agent_config.protocol == "callable"
         try:
-            if use_callable:
+            if self._adapter_override is not None:
+                # Host supplied a ready-built adapter (e.g. a VoiceCallableAdapter
+                # wired to a live telephony connection) — use it verbatim.
+                self._adapter = self._adapter_override
+            elif use_callable:
                 if self._agent is None:
                     raise ValueError(
                         "protocol 'callable' requires an `agent` callable passed to "
@@ -269,7 +275,12 @@ class OrchestratorAgent:
             self._emit_progress("initialization_failed", {
                 "error": f"Protocol adapter creation failed: {e}",
             })
-            target = "callable agent" if use_callable else f"{agent_config.protocol} adapter for '{agent_config.url}'"
+            if self._adapter_override is not None:
+                target = "injected adapter"
+            elif use_callable:
+                target = "callable agent"
+            else:
+                target = f"{agent_config.protocol} adapter for '{agent_config.url}'"
             raise RuntimeError(f"Failed to create {target}: {e}") from e
 
         assets = []
@@ -361,6 +372,7 @@ async def run_suite(
     progress_callback: ProgressCallback | None = None,
     agent: AgentCallable | None = None,
     base_dir: str | None = None,
+    adapter: ProtocolAdapter | None = None,
 ) -> dict[str, Any]:
     """Run a full test suite from a YAML config string.
 
@@ -369,7 +381,14 @@ async def run_suite(
     WebSocket endpoint. When ``agent`` is given, the YAML's ``url``/``protocol``
     are not required to describe a network endpoint.
 
+    Pass ``adapter`` to supply a pre-built :class:`ProtocolAdapter` (e.g. a
+    ``VoiceCallableAdapter`` wired to a host-owned telephony connection); it is
+    used verbatim in place of the YAML-derived adapter. Takes precedence over
+    ``agent``/``protocol``.
+
     ``base_dir`` resolves relative ``assets`` paths in the YAML (default: cwd).
     """
-    orchestrator = OrchestratorAgent(yaml_str, progress_callback, agent=agent, base_dir=base_dir)
+    orchestrator = OrchestratorAgent(
+        yaml_str, progress_callback, agent=agent, base_dir=base_dir, adapter=adapter
+    )
     return await orchestrator.run()

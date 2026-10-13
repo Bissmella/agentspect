@@ -229,6 +229,22 @@ class TestOrchestratorAgent:
             mock_create_adapter.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_orchestrator_injected_adapter_bypasses_create_adapter(self, valid_yaml):
+        """A host-supplied adapter is used verbatim; the YAML-derived path is skipped."""
+        injected = MagicMock()
+
+        with patch("agentspect.agents.orchestrator.create_llm_client") as mock_create_llm, \
+             patch("agentspect.agents.orchestrator.create_adapter") as mock_create_adapter:
+
+            mock_create_llm.return_value = MagicMock()
+
+            orchestrator = OrchestratorAgent(valid_yaml, adapter=injected)
+            await orchestrator.initialize()
+
+            assert orchestrator._adapter is injected
+            mock_create_adapter.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_orchestrator_initialize_invalid_yaml(self):
         invalid_yaml = "not: valid: yaml: [["
         orchestrator = OrchestratorAgent(invalid_yaml)
