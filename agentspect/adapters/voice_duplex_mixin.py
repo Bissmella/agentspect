@@ -15,8 +15,12 @@ directions stay live (which is what makes barge-in possible later):
 
 After both finish, STT transcribes the collected agent audio into the turn's text.
 
-VAD is optional: with a ``VadDetector`` (``agentspect[pipecat]``) the inbound loop emits
-agent speech-boundary events; without it, thin voice runs unchanged with no pipecat.
+VAD is optional. With a ``VadDetector`` (``agentspect[pipecat]``) the inbound loop emits
+agent speech-boundary events AND ends the turn on the speech→quiet edge — this is how a
+raw carrier stream (telephony) gets endpointed, since it never sends an ``end_of_speech``
+frame. Without a VAD, the turn ends only on an explicit ``end_of_speech`` frame or timeout
+(a self-framing WS agent), and thin voice runs unchanged with no pipecat. Raw-PCM frames
+(``{"format": "pcm"}``) are wrapped once into a WAV for the batch STT.
 Content TTS/STT is still batch under the hood (``VoiceIO``); real streaming STT/TTS
 drops in behind the same interface. Interruption/barge-in execution is deferred.
 """
@@ -26,8 +30,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import io
 import json
 import time
+import wave
 from collections.abc import AsyncIterator
 from typing import NamedTuple
 
@@ -46,6 +52,7 @@ class _AudioCapture(NamedTuple):
     silence_gaps_ms: list[int]
     events: list[VoiceEvent]
     timed_out: bool
+    is_pcm: bool = False  # True when frames were raw PCM (telephony) vs. WAV (mock)
 
 
 class VoiceDuplexMixin:
@@ -192,14 +199,18 @@ class VoiceDuplexMixin:
         last_t: float | None = None
         gaps: list[int] = []
         vad_speaking = False
+        is_pcm = False
 
         def finish(timed_out: bool) -> _AudioCapture:
             if vad_speaking:
                 events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.AGENT_SPEECH_STOP, party="agent"))
             if audio_q is not None:
+                # Raw PCM is wrapped once here; per-frame WAV headers would corrupt the concat.
+                if is_pcm and chunks:
+                    audio_q.put_nowait(self._pcm_to_wav(b"".join(chunks)))
                 audio_q.put_nowait(None)
             speech_ms = int((last_t - first_t) * 1000) if first_t is not None and last_t is not None else None
-            return _AudioCapture(b"".join(chunks), ttfa_ms, speech_ms, gaps, events, timed_out)
+            return _AudioCapture(b"".join(chunks), ttfa_ms, speech_ms, gaps, events, timed_out, is_pcm)
 
         collect_started = time.perf_counter()
         while True:
@@ -224,6 +235,7 @@ class VoiceDuplexMixin:
                     chunk = base64.b64decode(msg["data"])
                 except (ValueError, TypeError):
                     continue
+                is_pcm = msg.get("format") == "pcm"  # raw-PCM stream (telephony) vs. WAV frames (mock)
                 now = time.perf_counter()
                 if ttfa_ms is None:
                     ttfa_ms = int((now - collect_started) * 1000)
@@ -234,8 +246,8 @@ class VoiceDuplexMixin:
                         gaps.append(gap_ms)
                 last_t = now
                 chunks.append(chunk)
-                if audio_q is not None:
-                    audio_q.put_nowait(chunk)
+                if audio_q is not None and not is_pcm:
+                    audio_q.put_nowait(chunk)  # PCM is wrapped once in finish()
 
                 if self.vad is not None:
                     state = await self.vad.analyze(chunk)
@@ -245,6 +257,21 @@ class VoiceDuplexMixin:
                     elif state == VadState.QUIET and vad_speaking:
                         vad_speaking = False
                         events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.AGENT_SPEECH_STOP, party="agent"))
+                        return finish(False)  # VAD endpoint: agent went quiet → turn over
+
+    def _pcm_to_wav(self, pcm: bytes) -> bytes:
+        """Wrap raw PCM16 mono @ sample_rate into a WAV container for the batch STT."""
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(self.sample_rate)
+            w.writeframes(pcm)
+        return buf.getvalue()
+
+    def _cap_wav(self, cap: _AudioCapture) -> bytes:
+        """Captured audio as WAV bytes: wrap raw-PCM streams, pass WAV frames through."""
+        return self._pcm_to_wav(cap.audio) if cap.is_pcm else cap.audio
 
     def _voice_meta(self, cap: _AudioCapture, stt_confidence: float | None = None) -> VoiceMeta:
         d = self.voice_io.defaults

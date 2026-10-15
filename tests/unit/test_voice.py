@@ -631,6 +631,69 @@ async def test_adapter_with_vad_emits_agent_speech_events():
     await adapter.close()
 
 
+async def test_vad_ends_turn_without_end_of_speech_frame():
+    # A raw carrier stream never sends end_of_speech. The VAD speech→quiet edge must
+    # end the turn on its own (no trailing _EOS queued here).
+    from agentspect.voice.vad import VadState
+
+    conn = FakeConnection([_EOS, _audio_frame("a"), _audio_frame("b")])  # no final _EOS
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=_fake_voice_io(), timeout=5.0,
+        vad=_ScriptedVad([VadState.SPEAKING, VadState.QUIET]),
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    assert turn.error is None
+    assert turn.agent_response == "ab"              # ended on VAD quiet, not a frame/timeout
+    assert "agent_speech_stop" in _kinds(turn.voice_events)
+    await adapter.close()
+
+
+async def test_raw_pcm_frames_are_wrapped_to_wav_for_stt():
+    # Telephony frames carry raw PCM; the engine must hand the STT one valid WAV,
+    # not a concatenation of per-frame headers.
+    import io
+    import wave
+
+    from agentspect.voice.vad import VadState
+
+    class CapturingSTT(STTClient):
+        def __init__(self, model=None, api_key=None):
+            self.last_audio: bytes | None = None
+
+        async def transcribe(self, audio, *, language=None) -> TranscriptionResult:
+            self.last_audio = audio
+            return TranscriptionResult(text="ok", confidence=0.5, language=language)
+
+    def _pcm_frame(pcm: bytes) -> str:
+        return json.dumps({"type": "audio", "data": base64.b64encode(pcm).decode(), "format": "pcm"})
+
+    vio = VoiceIO(stt=CapturingSTT(), tts=FakeTTS(),
+                  defaults=VoiceIODefaults(voice="alloy", language="en"))
+    frame = _pcm_frame(b"\x00\x01" * 160)  # 160 samples of PCM16
+    conn = FakeConnection([_EOS, frame, frame])
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=vio, timeout=5.0,
+        vad=_ScriptedVad([VadState.SPEAKING, VadState.QUIET]),
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    assert turn.error is None
+    assert vio.stt.last_audio is not None and vio.stt.last_audio[:4] == b"RIFF"
+    with wave.open(io.BytesIO(vio.stt.last_audio), "rb") as w:
+        assert w.getnchannels() == 1 and w.getframerate() == 16000
+
+
 async def test_adapter_without_vad_records_no_agent_speech_events():
     # No VAD (thin voice, no pipecat) → ATA events only, no agent boundary events.
     conn = FakeConnection([_EOS, _audio_frame("a"), _EOS])
