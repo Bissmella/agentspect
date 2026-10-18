@@ -11,7 +11,13 @@ from agentspect.models.suite import (
     ScenarioVerdict,
     Verdict,
 )
-from agentspect.models.transcript import Transcript, Turn
+from agentspect.models.transcript import (
+    Transcript,
+    Turn,
+    VoiceEvent,
+    VoiceEventKind,
+    VoiceMeta,
+)
 from agentspect.models.yaml_input import AgentUnderTest, WorldStateInput
 
 
@@ -349,6 +355,61 @@ async def test_reporter_includes_metrics(
     assert "conversation_efficiency" in metrics
     assert metrics["task_completion"]["total"] == 1
     assert metrics["boundary_adherence"]["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reporter_serializes_per_turn_voice(mock_llm_client, sample_scenarios):
+    """Voice telemetry must survive into the serialized turns (the UI reads it)."""
+    voice_transcript = Transcript(
+        scenario_id="positive-1",
+        session_id="s1",
+        protocol="voice_websocket",
+        turns=[
+            Turn(
+                user_message="Book slot A",
+                agent_response="Booked!",
+                latency_ms=100,
+                voice=VoiceMeta(time_to_first_audio_ms=420, agent_speech_ms=1300, stt_confidence=0.91),
+                voice_events=[VoiceEvent(t_ms=0, kind=VoiceEventKind.AGENT_SPEECH_START, party="agent")],
+            )
+        ],
+    )
+    state = ATAGraphState(
+        agent_under_test=AgentUnderTest(
+            name="Voice Agent", url="tel:+15551234567", protocol="voice_websocket", description="phone"
+        ),
+        scenarios=sample_scenarios[:1],
+        transcripts={"positive-1": voice_transcript},
+        verdicts={"positive-1": ScenarioVerdict(
+            scenario_id="positive-1", verdict=Verdict.SUCCESS, reason="ok", assertion_results=[]
+        )},
+        world_state_snapshots={},
+        patch_ops={},
+    )
+
+    turn = (await reporter_node(state, mock_llm_client))["report"]["scenarios"][0]["turns"][0]
+    assert turn["voice"]["time_to_first_audio_ms"] == 420
+    assert turn["voice_events"][0]["kind"] == VoiceEventKind.AGENT_SPEECH_START
+
+
+@pytest.mark.asyncio
+async def test_reporter_text_turn_has_null_voice(
+    mock_llm_client, sample_scenarios, sample_transcripts, sample_verdicts
+):
+    """Text runs carry voice=None, not a crash or a fabricated block."""
+    state = ATAGraphState(
+        agent_under_test=AgentUnderTest(
+            name="Test Agent", url="http://localhost:8000", protocol="http", description="Test"
+        ),
+        scenarios=sample_scenarios,
+        transcripts=sample_transcripts,
+        verdicts=sample_verdicts,
+        world_state_snapshots={},
+        patch_ops={},
+    )
+    turn = (await reporter_node(state, mock_llm_client))["report"]["scenarios"][0]["turns"][0]
+    assert turn["voice"] is None
+    assert turn["voice_events"] == []
 
 
 @pytest.mark.asyncio

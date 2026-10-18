@@ -116,7 +116,14 @@ async def reporter_node(
             "reason": verdict.reason if verdict else None,
             "assertion_results": verdict.assertion_results if verdict else [],
             "turns": [
-                {"user": t.user_message, "agent": t.agent_response, "latency_ms": t.latency_ms}
+                {
+                    "user": t.user_message,
+                    "agent": t.agent_response,
+                    "latency_ms": t.latency_ms,
+                    # voice telemetry is None on text runs; keep it so the UI can show it
+                    "voice": t.voice.model_dump() if t.voice else None,
+                    "voice_events": [e.model_dump() for e in t.voice_events],
+                }
                 for t in (transcript.turns if transcript else [])
             ],
             "world_state_before": world_state_snapshots.get(f"{scenario.id}_before"),
