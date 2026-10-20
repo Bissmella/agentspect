@@ -38,6 +38,8 @@ class VoiceMeta(BaseModel):
     accent: str | None = None
     language: str | None = None
     audio_ref: str | None = None  # blob key for recorded audio, if stored
+    audio_wav_b64: str | None = Field(default=None, repr=False)  # agent's captured WAV
+    ata_audio_wav_b64: str | None = Field(default=None, repr=False)  # spoken turn (tester side)
 
 
 class VoiceEventKind(str, Enum):

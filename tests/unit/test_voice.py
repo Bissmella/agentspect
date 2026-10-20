@@ -175,9 +175,35 @@ async def test_adapter_send_turn_roundtrips_and_records_voice_meta():
     assert turn.voice.voice == "alloy"
     assert turn.voice.stt_confidence == 0.9
     assert turn.voice.time_to_first_audio_ms is not None
+    # the captured agent speech is inlined (b64) for the platform to offload
+    assert turn.voice.audio_wav_b64 is not None
+    assert base64.b64decode(turn.voice.audio_wav_b64) == b"You are booked."
     # the user's text was synthesized and sent as an audio frame
     assert json.loads(conn.sent[0])["type"] == "audio"
     await adapter.close()
+
+
+def test_frames_to_wav_concatenates_per_word_wavs():
+    import io
+    import struct
+    import wave
+
+    from agentspect.adapters.voice_duplex_mixin import VoiceDuplexMixin
+
+    def _wav(nframes, rate=16000):
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(b"".join(struct.pack("<h", 1000) for _ in range(nframes)))
+        return buf.getvalue()
+
+    out = VoiceDuplexMixin._frames_to_wav([_wav(100), _wav(150)])
+    with wave.open(io.BytesIO(out), "rb") as w:
+        assert (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (1, 2, 16000)
+        assert w.getnframes() == 250  # per-word WAVs decoded + re-wrapped as one
+    assert VoiceDuplexMixin._frames_to_wav([b"not a wav"]) == b""  # non-WAV → empty
 
 
 async def test_adapter_silence_reports_blank_without_deciding_failure():

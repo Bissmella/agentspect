@@ -131,6 +131,10 @@ async def reporter_node(
             "patch_ops": patch_ops.get(scenario.id, []),
         }
 
+        # The agent's greeting (voice agents speak first) — prepended to the session recording.
+        if transcript and transcript.opening_voice and transcript.opening_voice.audio_wav_b64:
+            result["opening_audio_wav_b64"] = transcript.opening_voice.audio_wav_b64
+
         if scenario.target_constraint:
             result["target_constraint"] = scenario.target_constraint
 

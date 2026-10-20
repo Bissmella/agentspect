@@ -76,7 +76,8 @@ class VoiceDuplexMixin:
         connection = self._connections[session_id]
         start = time.perf_counter()
         events: list[VoiceEvent] = []
-        said: list[str] = []  # tokens ATA actually sent, for the turn's user_message
+        said: list[str] = []  # tokens actually sent
+        out_frames: list[bytes] = []  # Outbound audio
         audio_q: asyncio.Queue[bytes | None] = asyncio.Queue()
 
         # Three concurrent activities over the open connection: inbound receive
@@ -86,7 +87,7 @@ class VoiceDuplexMixin:
         stt = asyncio.create_task(self._consume_stt(audio_q))
 
         try:
-            await self._stream_outbound(connection, message, events, said, start)
+            await self._stream_outbound(connection, message, events, said, start, out_frames)
             cap = await inbound
             agent_response, confidence = await stt
         except WebSocketException:
@@ -101,13 +102,19 @@ class VoiceDuplexMixin:
         events.extend(cap.events)
         text = "".join(said)
         latency_ms = self._ms(start)
+        ata_wav = self._frames_to_wav(out_frames)
+        ata_b64 = base64.b64encode(ata_wav).decode("ascii") if ata_wav else None
         if not cap.audio:
             # Silence is only a failure in conversational context — see user_simulator.
+            vm = self._voice_meta(cap)
+            vm.ata_audio_wav_b64 = ata_b64
             return Turn(user_message=text, agent_response="", latency_ms=latency_ms,
-                        voice=self._voice_meta(cap), voice_events=events)
+                        voice=vm, voice_events=events)
 
+        vm = self._voice_meta(cap, confidence)
+        vm.ata_audio_wav_b64 = ata_b64
         return Turn(user_message=text, agent_response=agent_response, latency_ms=latency_ms,
-                    voice=self._voice_meta(cap, confidence), voice_events=events)
+                    voice=vm, voice_events=events)
 
     @staticmethod
     async def _cancel(*tasks) -> None:
@@ -150,7 +157,7 @@ class VoiceDuplexMixin:
         return _one()
 
     async def _stream_outbound(self, connection, message, events: list[VoiceEvent],
-                               said: list[str], start: float) -> None:
+                               said: list[str], start: float, out_frames: list[bytes]) -> None:
         """Token stream → streaming TTS → audio frames → agent, as they are produced."""
         tokens = self._as_token_stream(message)
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -172,6 +179,7 @@ class VoiceDuplexMixin:
                 frame = await queue.get()
                 if frame is None:
                     break
+                out_frames.append(frame)
                 if not sent_any:
                     events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.ATA_SPEECH_START, party="ata"))
                     sent_any = True
@@ -273,6 +281,34 @@ class VoiceDuplexMixin:
         """Captured audio as WAV bytes: wrap raw-PCM streams, pass WAV frames through."""
         return self._pcm_to_wav(cap.audio) if cap.is_pcm else cap.audio
 
+    @staticmethod
+    def _frames_to_wav(frames: list[bytes]) -> bytes:
+        """Concatenate per-word WAV frames (outbound TTS) into one WAV.
+
+        Each frame is its own WAV container, so a byte-concat would be invalid,
+        decode each to PCM and re-wrap once, preserving the first frame's format.
+        Non-WAV frames (e.g. a test fake) yield b\"\".
+        """
+        pcm = bytearray()
+        params: tuple[int, int, int] | None = None
+        for f in frames:
+            try:
+                with wave.open(io.BytesIO(f), "rb") as w:
+                    params = params or (w.getnchannels(), w.getsampwidth(), w.getframerate())
+                    pcm += w.readframes(w.getnframes())
+            except (wave.Error, EOFError):
+                continue
+        if not pcm or params is None:
+            return b""
+        ch, width, rate = params
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(ch)
+            w.setsampwidth(width)
+            w.setframerate(rate)
+            w.writeframes(bytes(pcm))
+        return buf.getvalue()
+
     def _voice_meta(self, cap: _AudioCapture, stt_confidence: float | None = None) -> VoiceMeta:
         d = self.voice_io.defaults
         return VoiceMeta(
@@ -283,4 +319,6 @@ class VoiceDuplexMixin:
             voice=d.voice,
             accent=d.accent,
             language=d.language,
+            # inline the captured agent speech (WAV)
+            audio_wav_b64=base64.b64encode(self._cap_wav(cap)).decode("ascii") if cap.audio else None,
         )

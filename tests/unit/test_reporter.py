@@ -364,12 +364,14 @@ async def test_reporter_serializes_per_turn_voice(mock_llm_client, sample_scenar
         scenario_id="positive-1",
         session_id="s1",
         protocol="voice_websocket",
+        opening_voice=VoiceMeta(audio_wav_b64="T3Blbg=="),  # agent greeting audio
         turns=[
             Turn(
                 user_message="Book slot A",
                 agent_response="Booked!",
                 latency_ms=100,
-                voice=VoiceMeta(time_to_first_audio_ms=420, agent_speech_ms=1300, stt_confidence=0.91),
+                voice=VoiceMeta(time_to_first_audio_ms=420, agent_speech_ms=1300, stt_confidence=0.91,
+                                audio_wav_b64="UklGRg=="),
                 voice_events=[VoiceEvent(t_ms=0, kind=VoiceEventKind.AGENT_SPEECH_START, party="agent")],
             )
         ],
@@ -387,9 +389,12 @@ async def test_reporter_serializes_per_turn_voice(mock_llm_client, sample_scenar
         patch_ops={},
     )
 
-    turn = (await reporter_node(state, mock_llm_client))["report"]["scenarios"][0]["turns"][0]
+    sc = (await reporter_node(state, mock_llm_client))["report"]["scenarios"][0]
+    turn = sc["turns"][0]
     assert turn["voice"]["time_to_first_audio_ms"] == 420
+    assert turn["voice"]["audio_wav_b64"] == "UklGRg=="  # agent WAV survives for the platform to offload
     assert turn["voice_events"][0]["kind"] == VoiceEventKind.AGENT_SPEECH_START
+    assert sc["opening_audio_wav_b64"] == "T3Blbg=="  # greeting audio reaches the platform too
 
 
 @pytest.mark.asyncio
