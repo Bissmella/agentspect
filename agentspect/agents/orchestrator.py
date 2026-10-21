@@ -13,8 +13,11 @@ from agentspect.agents.state import ATAGraphState
 from agentspect.agents.user_simulator import user_simulator_node
 from agentspect.agents.world_state_patcher import world_state_patcher_node
 from agentspect.llm.client import LLMClient, create_llm_client
+from agentspect.models.suite import Scenario
 from agentspect.models.world_state import WorldState
 from agentspect.models.yaml_input import YAMLInput
+from agentspect.services.dag import topological_batches
+from agentspect.services.placeholder import validate_placeholders
 from agentspect.services.yaml_parser import YAMLValidationError, parse_and_validate
 
 
@@ -190,6 +193,41 @@ def build_graph(
     return graph
 
 
+def build_generate_graph(llm_client: LLMClient) -> StateGraph:
+    """Generation only: ingest assets, generate scenarios, stop (for a review gate)."""
+    graph = StateGraph(ATAGraphState)
+    graph.add_node("asset_ingestion", _create_asset_ingestion_node(llm_client))
+    graph.add_node("generate_scenarios", _create_scenario_generator_node(llm_client))
+    graph.set_entry_point("asset_ingestion")
+    graph.add_edge("asset_ingestion", "generate_scenarios")
+    graph.add_edge("generate_scenarios", END)
+    return graph
+
+
+def build_execute_graph(llm_client: LLMClient, adapter: ProtocolAdapter) -> StateGraph:
+    """Execution only: run pre-supplied (reviewed) scenarios through to the report."""
+    graph = StateGraph(ATAGraphState)
+    graph.add_node("prepare_batch", _prepare_batch_node)
+    graph.add_node("user_simulator", _create_user_simulator_node(llm_client, adapter))
+    graph.add_node("scorer", _create_scorer_node(llm_client))
+    graph.add_node("world_state_patcher", _create_world_state_patcher_node(llm_client))
+    graph.add_node("advance_batch", _advance_batch_node)
+    graph.add_node("reporter", _create_reporter_node(llm_client))
+
+    graph.set_entry_point("prepare_batch")
+    graph.add_conditional_edges(
+        "prepare_batch",
+        _should_continue_after_prepare,
+        {"user_simulator": "user_simulator", "reporter": "reporter"},
+    )
+    graph.add_edge("user_simulator", "scorer")
+    graph.add_edge("scorer", "world_state_patcher")
+    graph.add_edge("world_state_patcher", "advance_batch")
+    graph.add_edge("advance_batch", "prepare_batch")
+    graph.add_edge("reporter", END)
+    return graph
+
+
 class OrchestratorAgent:
     def __init__(
         self,
@@ -338,6 +376,83 @@ class OrchestratorAgent:
             "verdict_counts": report.get("verdict_counts", {}),
         })
 
+        return report
+
+    async def generate(self) -> list[dict[str, Any]]:
+        """Generate scenarios only and return them serialized, for a review gate.
+
+        Runs asset ingestion + scenario generation, then stops — no adapter is used
+        (construction only), so this is safe to call before an agent/call exists.
+        """
+        initial_state = await self.initialize()
+        self._emit_progress("starting_generation")
+
+        compiled = build_generate_graph(self._llm_client).compile()
+        merged: dict[str, Any] = {}
+        try:
+            async for event in compiled.astream(initial_state):
+                for node_name, node_output in event.items():
+                    self._emit_progress(f"node_{node_name}", {
+                        "node": node_name,
+                        "status": node_output.get("status"),
+                        "error": node_output.get("error"),
+                    })
+                    merged.update(node_output)
+        finally:
+            await self._close_adapter()
+
+        if merged.get("status") == "failed" or "scenarios" not in merged:
+            error_msg = merged.get("error") or initial_state.get("error") or "generation produced no scenarios"
+            self._emit_progress("generation_failed", {"error": error_msg})
+            raise RuntimeError(f"Scenario generation failed: {error_msg}")
+
+        scenarios = merged["scenarios"]
+        self._emit_progress("scenarios_generated", {"count": len(scenarios)})
+        return [s.model_dump(mode="json") for s in scenarios]
+
+    async def execute(self, scenarios: list[dict[str, Any]]) -> dict[str, Any]:
+        """Execute a reviewed/edited scenario set (skips generation) through the report."""
+        initial_state = await self.initialize()
+
+        try:
+            scen_objs = [Scenario.model_validate(s) for s in scenarios]
+        except Exception as e:
+            raise RuntimeError(f"Invalid scenario in the reviewed set: {e}") from e
+
+        # The user may have edited turns; re-check placeholders resolve in world_state.
+        world_state_data = initial_state["world_state_input"].model_dump()
+        for sc in scen_objs:
+            for turn in sc.turns:
+                errors = validate_placeholders(turn, world_state_data)
+                if errors:
+                    raise RuntimeError(f"Scenario '{sc.id}' has invalid placeholders: {errors}")
+
+        initial_state["scenarios"] = scen_objs
+        initial_state["scenario_batches"] = topological_batches(scen_objs)
+        initial_state["status"] = "scenarios_generated"
+
+        self._emit_progress("starting_execution")
+        compiled = build_execute_graph(self._llm_client, self._adapter).compile()
+
+        final_state = None
+        try:
+            async for event in compiled.astream(initial_state):
+                for node_name, node_output in event.items():
+                    self._emit_progress(f"node_{node_name}", {
+                        "node": node_name,
+                        "status": node_output.get("status"),
+                        "error": node_output.get("error"),
+                    })
+                    if node_name == "reporter":
+                        final_state = node_output
+        finally:
+            await self._close_adapter()
+
+        if not final_state or "report" not in final_state:
+            raise RuntimeError("Suite run did not produce a report")
+
+        report = final_state["report"]
+        self._emit_progress("completed", {"verdict_counts": report.get("verdict_counts", {})})
         return report
 
     async def run_from_state(self, state: ATAGraphState) -> dict[str, Any]:

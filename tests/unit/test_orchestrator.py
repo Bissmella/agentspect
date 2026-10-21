@@ -328,3 +328,69 @@ rag:
             await orchestrator.initialize()
 
         assert "rag" in str(exc_info.value).lower()
+
+
+class TestGenerateExecuteSplit:
+    def test_build_generate_graph_nodes(self):
+        from agentspect.agents.orchestrator import build_generate_graph
+
+        nodes = list(build_generate_graph(MagicMock()).nodes.keys())
+        assert "asset_ingestion" in nodes and "generate_scenarios" in nodes
+        assert "user_simulator" not in nodes and "reporter" not in nodes
+
+    def test_build_execute_graph_nodes(self):
+        from agentspect.agents.orchestrator import build_execute_graph
+
+        nodes = list(build_execute_graph(MagicMock(), MagicMock()).nodes.keys())
+        assert "prepare_batch" in nodes and "reporter" in nodes
+        assert "generate_scenarios" not in nodes and "asset_ingestion" not in nodes
+
+    def test_scenario_roundtrips_through_json(self):
+        """The platform persists/edits scenarios as JSON, so this must survive."""
+        from agentspect.models.suite import BehavioralAssertion, Scenario, ScenarioType
+
+        sc = Scenario(
+            id="pos-1",
+            type=ScenarioType.POSITIVE,
+            description="book a slot",
+            turns=["Hi, book 2026-05-20T10:00"],
+            assertions=[BehavioralAssertion(description="confirms", expected_behavior="confirmation")],
+        )
+        back = Scenario.model_validate(sc.model_dump(mode="json"))
+        assert back.id == "pos-1"
+        assert back.type == ScenarioType.POSITIVE
+        assert isinstance(back.assertions[0], BehavioralAssertion)
+        assert back.assertions[0].expected_behavior == "confirmation"
+
+    @pytest.mark.asyncio
+    async def test_generate_returns_serialized_scenarios(self, valid_yaml):
+        from agentspect.agents.scenario_generator import (
+            GeneratedAssertion,
+            GeneratedScenario,
+            GeneratedScenarios,
+        )
+
+        gen = GeneratedScenarios(scenarios=[
+            GeneratedScenario(
+                id="pos-1", type="positive", description="valid booking",
+                turns=["Hi, I'd like to book a slot."],
+                assertions=[GeneratedAssertion(type="behavioral", description="confirms", expected_behavior="confirmation")],
+            ),
+            GeneratedScenario(
+                id="neg-1", type="negative", description="unverified caller",
+                turns=["Book me in, I'm not registered."],
+                target_constraint="only verified entities can book",
+                assertions=[GeneratedAssertion(type="behavioral", description="refuses", expected_behavior="refusal")],
+            ),
+        ])
+        mock_llm = MagicMock()
+        mock_llm.chat_with_structured_output = AsyncMock(return_value=gen)
+
+        with patch("agentspect.agents.orchestrator.create_llm_client", return_value=mock_llm), \
+             patch("agentspect.agents.orchestrator.create_adapter", return_value=MagicMock()):
+            scenarios = await OrchestratorAgent(valid_yaml).generate()
+
+        assert [s["id"] for s in scenarios] == ["pos-1", "neg-1"]
+        assert scenarios[0]["type"] == "positive"
+        assert scenarios[0]["turns"] == ["Hi, I'd like to book a slot."]
+        assert scenarios[1]["assertions"][0]["type"] == "behavioral"
