@@ -431,4 +431,10 @@ def create_llm_client(provider: str, model: str, api_key: str | None = None) -> 
             base_url=settings.ollama_base_url,
             api_key="ollama",   # Ollama does not check the key
         )
-    raise ValueError(f"Unknown LLM provider: {provider}. Must be one of: anthropic, openai, google, openrouter, ollama")
+    if provider == "groq":
+        return OpenAICompatibleClient(
+            model=model,
+            base_url="https://api.groq.com/openai/v1",
+            api_key=api_key or settings.groq_api_key,
+        )
+    raise ValueError(f"Unknown LLM provider: {provider}. Must be one of: anthropic, openai, google, openrouter, groq, ollama")

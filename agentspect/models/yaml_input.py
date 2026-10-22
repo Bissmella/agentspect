@@ -32,7 +32,7 @@ class TestConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    provider: str = Field(pattern=r"^(anthropic|openai|google|openrouter|ollama)$")
+    provider: str = Field(pattern=r"^(anthropic|openai|google|openrouter|groq|ollama)$")
     model: str
 
 
