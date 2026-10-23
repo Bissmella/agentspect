@@ -294,6 +294,16 @@ class OpenAICompatibleClient(LLMClient):
         raise ValueError("LLM did not return structured output via tool call")
 
 
+def _proto_to_native(value: Any) -> Any:
+    """Recursively convert Gemini proto-plus args (MapComposite/RepeatedComposite)
+    into plain dicts/lists so pydantic can validate nested structures."""
+    if hasattr(value, "items"):  # MapComposite / mapping
+        return {k: _proto_to_native(v) for k, v in value.items()}
+    if hasattr(value, "__iter__") and not isinstance(value, (str, bytes)):  # RepeatedComposite
+        return [_proto_to_native(v) for v in value]
+    return value
+
+
 class GoogleClient(LLMClient):
     def __init__(self, model: str, api_key: str | None = None):
         import google.generativeai as genai
@@ -321,6 +331,7 @@ class GoogleClient(LLMClient):
         generation_config = self.genai.GenerationConfig(temperature=temperature, max_output_tokens=max_tokens)
 
         tool_declarations = None
+        tool_config = None
         if tools:
             tool_declarations = [
                 self.genai.protos.Tool(
@@ -334,12 +345,16 @@ class GoogleClient(LLMClient):
                     ]
                 )
             ]
+            # Force a function call. Gemini otherwise answers in text on large/nested
+            # schemas (e.g. scenario generation), which breaks structured output.
+            tool_config = {"function_calling_config": {"mode": "ANY"}}
 
         response = await asyncio.to_thread(
             model.generate_content,
             contents,
             generation_config=generation_config,
             tools=tool_declarations,
+            tool_config=tool_config,
         )
 
         content = ""
@@ -351,7 +366,7 @@ class GoogleClient(LLMClient):
             if part.function_call:
                 tool_calls.append({
                     "name": part.function_call.name,
-                    "arguments": dict(part.function_call.args),
+                    "arguments": _proto_to_native(part.function_call.args),
                     "id": part.function_call.name,
                 })
 
