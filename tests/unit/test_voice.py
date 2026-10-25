@@ -156,6 +156,19 @@ async def test_voice_io_synthesize_and_transcribe_roundtrip():
     assert result.text == "book me a slot"
 
 
+async def test_synthesize_stream_segments_by_sentence_not_word():
+    # Phrases, not one clip per word — so the downstream STT gets natural boundaries
+    # instead of "Could youpleaseprovide".
+    vio = _fake_voice_io()  # FakeTTS returns the text bytes, so chunks decode to what was synth'd
+
+    async def toks():
+        for t in ["Hi ", "there. ", "Please ", "book ", "slot ", "A?"]:
+            yield t
+
+    chunks = [c.decode() async for c in vio.synthesize_stream(toks())]
+    assert chunks == ["Hi there.", "Please book slot A?"]
+
+
 # ── Adapter ─────────────────────────────────────────────────────────────────────
 
 async def test_adapter_captures_opening_greeting():
@@ -729,6 +742,49 @@ async def test_raw_pcm_frames_are_wrapped_to_wav_for_stt():
     assert vio.stt.last_audio is not None and vio.stt.last_audio[:4] == b"RIFF"
     with wave.open(io.BytesIO(vio.stt.last_audio), "rb") as w:
         assert w.getnchannels() == 1 and w.getframerate() == 16000
+
+
+async def test_multi_wav_frames_are_rejoined_into_one_valid_wav_for_stt():
+    # A real agent streams its reply as MANY WAV frames. The engine must decode + rejoin
+    # them into one valid WAV for the STT, never byte-concatenate the containers (which
+    # makes the STT read only the first header and garble the rest → "stuck" words).
+    import io
+    import struct
+    import wave
+
+    def _wav(nframes: int) -> str:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b"".join(struct.pack("<h", 1000) for _ in range(nframes)))
+        return json.dumps({"type": "audio", "data": base64.b64encode(buf.getvalue()).decode(), "format": "wav"})
+
+    class CapturingSTT(STTClient):
+        def __init__(self, model=None, api_key=None):
+            self.last_audio: bytes | None = None
+
+        async def transcribe(self, audio, *, language=None) -> TranscriptionResult:
+            self.last_audio = audio
+            return TranscriptionResult(text="ok", confidence=0.5, language=language)
+
+    vio = VoiceIO(stt=CapturingSTT(), tts=FakeTTS(),
+                  defaults=VoiceIODefaults(voice="alloy", language="en"))
+    conn = FakeConnection([_EOS, _wav(100), _wav(150)], hang=True)
+    adapter = VoiceWebSocketAdapter(url="wss://x", voice_io=vio, timeout=5.0, silence_ms=100)
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    assert turn.error is None
+    assert vio.stt.last_audio is not None and vio.stt.last_audio[:4] == b"RIFF"
+    with wave.open(io.BytesIO(vio.stt.last_audio), "rb") as w:
+        assert w.getnframes() == 250  # two frames rejoined, not a corrupt byte-concat
+    await adapter.close()
 
 
 async def test_pcm_vad_waits_for_speech_before_endpointing():

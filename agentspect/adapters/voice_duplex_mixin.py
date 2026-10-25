@@ -215,8 +215,8 @@ class VoiceDuplexMixin:
         then → a silent (no-response) turn. LISTENING captures until the speech→silence edge
         (VAD quiet on PCM, an inter-frame ``silence_ms`` gap on WS, or an optional
         end_of_speech). There is deliberately **no cap on how long the agent may speak** —
-        only silence ends its turn. If ``audio_q`` is given, chunks are pushed to it (with a
-        final ``None`` sentinel) for a concurrent STT consumer.
+        only silence ends its turn. If ``audio_q`` is given, the captured audio is pushed as a
+        single valid WAV (then a ``None`` sentinel) for the STT consumer.
         """
         chunks: list[bytes] = []
         events: list[VoiceEvent] = []
@@ -233,14 +233,19 @@ class VoiceDuplexMixin:
             # Reached speech → the agent spoke; still AWAITING → it never did (silent turn).
             if state is CallState.LISTENING:
                 events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.AGENT_SPEECH_STOP, party="agent"))
+            if not chunks:
+                wav = b""
+            elif is_pcm:
+                wav = self._pcm_to_wav(b"".join(chunks))
+            else:
+                wav = self._join_wav_frames(chunks)
             if audio_q is not None:
-                # Raw PCM is wrapped once here; per-frame WAV headers would corrupt the concat.
-                if is_pcm and chunks:
-                    audio_q.put_nowait(self._pcm_to_wav(b"".join(chunks)))
+                if wav:
+                    audio_q.put_nowait(wav)
                 audio_q.put_nowait(None)
             speech_ms = int((last_t - first_t) * 1000) if first_t is not None and last_t is not None else None
             return _AudioCapture(
-                b"".join(chunks), ttfa_ms, speech_ms, gaps, events,
+                wav, ttfa_ms, speech_ms, gaps, events,
                 timed_out=state is not CallState.LISTENING, is_pcm=is_pcm,
             )
 
@@ -311,9 +316,7 @@ class VoiceDuplexMixin:
             else:
                 note_gap(now)
             last_t = now
-            chunks.append(chunk)
-            if audio_q is not None and not is_pcm:
-                audio_q.put_nowait(chunk)  # PCM is wrapped once in finish()
+            chunks.append(chunk)  # STT audio is assembled once in finish(), not per frame
 
     def _pcm_to_wav(self, pcm: bytes) -> bytes:
         """Wrap raw PCM16 mono @ sample_rate into a WAV container for the batch STT."""
@@ -325,9 +328,10 @@ class VoiceDuplexMixin:
             w.writeframes(pcm)
         return buf.getvalue()
 
-    def _cap_wav(self, cap: _AudioCapture) -> bytes:
-        """Captured audio as WAV bytes: wrap raw-PCM streams, pass WAV frames through."""
-        return self._pcm_to_wav(cap.audio) if cap.is_pcm else cap.audio
+    def _join_wav_frames(self, frames: list[bytes]) -> bytes:
+        """One valid WAV from per-frame WAV containers; raw-concat fallback for
+        non-WAV frames (a raw stream, or a test fake that isn't a real WAV)."""
+        return self._frames_to_wav(frames) or b"".join(frames)
 
     @staticmethod
     def _frames_to_wav(frames: list[bytes]) -> bytes:
@@ -367,6 +371,6 @@ class VoiceDuplexMixin:
             voice=d.voice,
             accent=d.accent,
             language=d.language,
-            # inline the captured agent speech (WAV)
-            audio_wav_b64=base64.b64encode(self._cap_wav(cap)).decode("ascii") if cap.audio else None,
+            # inline the captured agent speech (already one valid WAV from finish())
+            audio_wav_b64=base64.b64encode(cap.audio).decode("ascii") if cap.audio else None,
         )

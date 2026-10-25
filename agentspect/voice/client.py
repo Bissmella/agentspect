@@ -79,20 +79,20 @@ class VoiceIO:
         )
 
     async def synthesize_stream(self, tokens: AsyncIterator[str]) -> AsyncIterator[bytes]:
-        """Stream TTS: yield audio as text arrives, flushing on word boundaries.
+        """Stream TTS by natural phrase, flushing on sentence boundaries.
 
-        ``tokens`` is an async iterator of text chunks (LLM tokens). This batch-backed
-        default buffers to whole words and synthesizes each — enough to keep the
-        duplex pipeline streaming-shaped. A real streaming TTS (Pipecat) replaces this
-        method body without touching callers.
+        ``tokens`` is an async iterator of text chunks (LLM tokens).
+        A real streaming TTS (Pipecat) replaces this body without touching callers.
         """
         buffer = ""
         async for token in tokens:
             buffer += token
-            if buffer and buffer[-1].isspace():
-                chunk = buffer.strip()
-                if chunk:
-                    yield await self.synthesize(chunk)
+            trimmed = buffer.strip()
+            ends_sentence = trimmed.endswith((".", "!", "?"))
+            # Flush a very long clause at a word boundary so we don't hold the whole turn.
+            long_run_on = len(buffer) >= 200 and token[-1:].isspace()
+            if trimmed and (ends_sentence or long_run_on):
+                yield await self.synthesize(trimmed)
                 buffer = ""
         if buffer.strip():
             yield await self.synthesize(buffer.strip())

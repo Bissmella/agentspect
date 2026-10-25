@@ -55,7 +55,7 @@ class VoiceWebSocketAdapter(VoiceDuplexMixin, WebSocketConnectionMixin, Protocol
         try:
             cap = await self._collect_agent_audio(connection, self.greeting_timeout, time.perf_counter())
             if cap.audio:
-                result = await self.voice_io.transcribe(self._cap_wav(cap))
+                result = await self.voice_io.transcribe(cap.audio)
                 self._openings[session_id] = (result.text, self._voice_meta(cap, result.confidence))
             else:
                 self._openings[session_id] = None
