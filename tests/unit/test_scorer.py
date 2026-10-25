@@ -5,11 +5,13 @@ from datetime import UTC, datetime
 from agentspect.agents.scorer import (
     ScorerAgent,
     scorer_node,
+    _check_probe_result,
     _evaluate_world_state_assertion_deterministic,
     _classify_recovery_quality,
     AssertionResult,
     RecoveryClassification,
 )
+from agentspect.models.suite import ScenarioVerdict
 from agentspect.agents.state import ATAGraphState
 from agentspect.models.suite import (
     BehavioralAssertion,
@@ -343,6 +345,38 @@ async def test_scorer_with_probe_chain(mock_llm_client):
 
     assert "primary" in result["verdicts"]
     assert "probe" in result["verdicts"]
+
+
+def _verdict(v):
+    return ScenarioVerdict(scenario_id="x", verdict=v, reason="")
+
+
+def _probe(dep_type):
+    return Scenario(id="p", type=ScenarioType.POSITIVE, description="probe", turns=["x"],
+                    depends_on="parent", depends_on_type=dep_type)
+
+
+def test_probe_does_not_upgrade_a_parent_that_already_failed():
+    # The headline bug: the agent never booked (parent FAILURE), the probe couldn't
+    # rebook (FAILURE), and that must NOT be read as "booking persisted → SUCCESS".
+    out = _check_probe_result(_probe(DependsOnType.PROBE), _verdict(Verdict.FAILURE), _verdict(Verdict.FAILURE))
+    assert out == Verdict.FAILURE
+
+
+def test_probe_confirms_or_suspects_only_an_unverified_parent():
+    unv = _verdict(Verdict.SUCCESS_UNVERIFIED)
+    # Parent succeeded, probe failed to rebook → confirmed SUCCESS.
+    assert _check_probe_result(_probe(DependsOnType.PROBE), _verdict(Verdict.FAILURE), unv) == Verdict.SUCCESS
+    # Parent succeeded, probe rebooked (state didn't hold) → SUSPECT.
+    assert _check_probe_result(_probe(DependsOnType.PROBE), _verdict(Verdict.SUCCESS), unv) == Verdict.SUSPECT
+
+
+def test_defensive_probe_only_applies_to_a_failed_negative():
+    dp = _probe(DependsOnType.DEFENSIVE_PROBE)
+    # Agent correctly refused (parent SUCCESS) → defensive probe can't downgrade it.
+    assert _check_probe_result(dp, _verdict(Verdict.SUCCESS), _verdict(Verdict.SUCCESS)) == Verdict.SUCCESS
+    # Agent wrongly accepted (parent FAILURE) + corruption detected → FAILURE_CORRUPT.
+    assert _check_probe_result(dp, _verdict(Verdict.SUCCESS), _verdict(Verdict.FAILURE)) == Verdict.FAILURE_CORRUPT
 
 
 @pytest.mark.asyncio

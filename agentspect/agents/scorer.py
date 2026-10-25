@@ -446,18 +446,20 @@ def _check_probe_result(
     parent_verdict: ScenarioVerdict,
 ) -> Verdict:
     if probe_scenario.depends_on_type == DependsOnType.PROBE:
+        # A probe only verifies a parent that actually succeeded (and is awaiting
+        # verification).
+        if parent_verdict.verdict != Verdict.SUCCESS_UNVERIFIED:
+            return parent_verdict.verdict
         probe_failed = probe_verdict.verdict in (Verdict.FAILURE, Verdict.ERROR)
-        if probe_failed:
-            return Verdict.SUCCESS
-        else:
-            return Verdict.SUSPECT
+        return Verdict.SUCCESS if probe_failed else Verdict.SUSPECT
 
     elif probe_scenario.depends_on_type == DependsOnType.DEFENSIVE_PROBE:
+        # A defensive probe only matters when the negative scenario failed (the agent
+        # wrongly accepted). If the agent correctly refused, there is nothing to corrupt.
+        if parent_verdict.verdict != Verdict.FAILURE:
+            return parent_verdict.verdict
         probe_detected_corruption = probe_verdict.verdict == Verdict.SUCCESS
-        if probe_detected_corruption:
-            return Verdict.FAILURE_CORRUPT
-        else:
-            return Verdict.FAILURE
+        return Verdict.FAILURE_CORRUPT if probe_detected_corruption else Verdict.FAILURE
 
     return parent_verdict.verdict
 
