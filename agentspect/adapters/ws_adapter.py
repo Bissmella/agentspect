@@ -114,10 +114,26 @@ def _create_voice_adapter(url: str, timeout: float, voice) -> ProtocolAdapter:
         language=voice.tts.language,
         accent=voice.tts.accent,
     )
-    greeting_timeout = min(timeout, max(voice.endpointing.silence_ms / 1000.0, 1.0))
+    silence_ms = voice.endpointing.silence_ms
+    greeting_timeout = min(timeout, max(silence_ms / 1000.0, 1.0))
+
+    # VAD endpoints a continuous stream (telephony) on the speech→silence edge. On a
+    # frame protocol (WS) the duplex loop endpoints on an inter-frame silence gap, so
+    # VAD is optional there — a thin install without pipecat still works.
+    vad = None
+    if voice.endpointing.mode == "vad":
+        try:
+            from agentspect.voice.vad import SileroVadDetector
+
+            vad = SileroVadDetector(stop_secs=max(silence_ms / 1000.0, 0.1))
+        except ImportError:
+            vad = None
+
     return VoiceWebSocketAdapter(
         url=url,
         voice_io=voice_io,
         timeout=timeout,
         greeting_timeout=greeting_timeout,
+        silence_ms=silence_ms,
+        vad=vad,
     )

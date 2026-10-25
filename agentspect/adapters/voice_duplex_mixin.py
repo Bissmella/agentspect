@@ -1,28 +1,27 @@
 """Duplex voice logic for voice adapters.
 
+A turn is driven by an explicit conversation state machine (``CallState``) — the model a
+real call uses, where **silence** drives the turn-taking and nobody announces end-of-speech:
 
-``send_turn`` runs **two concurrent activities** over the open connection, so both
-directions stay live (which is what makes barge-in possible later):
+    SPEAKING   ATA streams its utterance (token stream → TTS → frames). It does NOT
+               send end_of_speech; it simply stops sending.
+    AWAITING   ATA has finished; it waits up to ``response_timeout`` for the agent to
+               *start* speaking. If the agent never does, the turn is a silent
+               (no-response) one for the simulator to judge. This is the only clock on
+               the agent, and it bounds *starting* — never how long the agent may talk.
+    LISTENING  the agent is speaking; ATA captures audio until the speech→silence edge
+               ends the turn: a VAD quiet edge on a continuous PCM stream (telephony),
+               or an inter-frame silence gap of ``silence_ms`` on a frame protocol (WS).
+               An incoming end_of_speech is honored as an optional early end, never
+               required. There is deliberately **no cap on the agent's speaking time**.
+    ENDED      turn complete; STT transcribes the captured audio into the turn's text.
 
-- **Outbound** — consume the token stream, feed it to streaming TTS, and forward
-  each audio frame to the agent as it is produced (a producer task fills a queue,
-  the sender drains it). ``ATA_SPEECH_START`` is stamped when the *first frame is
-  sent*, ``ATA_SPEECH_STOP`` after the last; then an ``end_of_speech`` frame tells
-  the agent the turn is over.
-- **Inbound** — a continuous receive loop (``_collect_agent_audio``) running in
-  parallel: accumulate audio, run VAD, record TTFA / speech span / silence gaps and
-  agent speech-start/stop events.
-
-After both finish, STT transcribes the collected agent audio into the turn's text.
-
-VAD is optional. With a ``VadDetector`` (``agentspect[pipecat]``) the inbound loop emits
-agent speech-boundary events AND ends the turn on the speech→quiet edge — this is how a
-raw carrier stream (telephony) gets endpointed, since it never sends an ``end_of_speech``
-frame. Without a VAD, the turn ends only on an explicit ``end_of_speech`` frame or timeout
-(a self-framing WS agent), and thin voice runs unchanged with no pipecat. Raw-PCM frames
-(``{"format": "pcm"}``) are wrapped once into a WAV for the batch STT.
-Content TTS/STT is still batch under the hood (``VoiceIO``); real streaming STT/TTS
-drops in behind the same interface. Interruption/barge-in execution is deferred.
+Inbound receive + STT run concurrently with SPEAKING so the agent may begin replying
+before ATA finishes; Stage 1 consumes the result after speaking (barge-in is deferred).
+VAD is optional (``agentspect[pipecat]``): it endpoints a continuous PCM stream, while WS
+WAV frames (a header per frame) use the inter-frame silence gap instead. Raw-PCM frames
+(``{"format": "pcm"}``) are wrapped once into a WAV for the batch STT. Content TTS/STT is
+batch under the hood (``VoiceIO``); real streaming drops in behind the same interface.
 """
 
 from __future__ import annotations
@@ -35,6 +34,7 @@ import json
 import time
 import wave
 from collections.abc import AsyncIterator
+from enum import Enum
 from typing import NamedTuple
 
 from websockets.exceptions import WebSocketException
@@ -43,6 +43,15 @@ from agentspect.models.transcript import AgentFailure, Turn, VoiceEvent, VoiceEv
 from agentspect.voice.vad import VadState
 
 _END_SIGNALS = {"end_of_speech", "end", "eos"}
+
+
+class CallState(str, Enum):
+    """Where a voice turn is in its lifecycle. Silence drives the transitions."""
+
+    SPEAKING = "speaking"    # ATA is streaming its own utterance
+    AWAITING = "awaiting"    # ATA done; waiting for the agent to start speaking
+    LISTENING = "listening"  # agent is speaking; capturing until the silence edge
+    ENDED = "ended"          # turn complete
 
 
 class _AudioCapture(NamedTuple):
@@ -59,12 +68,14 @@ class VoiceDuplexMixin:
     """Provides a streaming, concurrent ``send_turn`` for voice adapters.
 
     Expects on ``self``: ``voice_io``, ``timeout``, ``dead_air_gap_ms``; optional
-    ``vad`` (``VadDetector | None``) and ``sample_rate``; and ``_connections``
-    (from ``WebSocketConnectionMixin``).
+    ``vad`` (``VadDetector | None``), ``sample_rate``, ``silence_ms``,
+    ``response_timeout``; and ``_connections`` (from ``WebSocketConnectionMixin``).
     """
 
     vad = None
     sample_rate: int = 16000
+    silence_ms: int = 700           # quiet gap (speech→silence) that ends a turn
+    response_timeout: float = 15.0  # how long to wait for the agent to start replying
     supports_token_stream = True  # the simulator streams LLM tokens into send_turn
 
     async def send_turn(self, session_id: str, message: str | AsyncIterator[str]) -> Turn:
@@ -80,10 +91,9 @@ class VoiceDuplexMixin:
         out_frames: list[bytes] = []  # Outbound audio
         audio_q: asyncio.Queue[bytes | None] = asyncio.Queue()
 
-        # Three concurrent activities over the open connection: inbound receive
-        # (VAD + timing), continuous STT on that audio, and the outbound token→TTS
-        # →send stream. All run at once so both directions stay live.
-        inbound = asyncio.create_task(self._collect_agent_audio(connection, self.timeout, start, audio_q))
+        # Inbound receive + continuous STT start immediately (the agent may begin
+        # replying before we finish speaking).
+        inbound = asyncio.create_task(self._collect_agent_audio(connection, self.response_timeout, start, audio_q))
         stt = asyncio.create_task(self._consume_stt(audio_q))
 
         try:
@@ -168,9 +178,14 @@ class VoiceDuplexMixin:
                 yield token
 
         async def produce() -> None:
-            async for frame in self.voice_io.synthesize_stream(tee()):
-                await queue.put(frame)
-            await queue.put(None)  # sentinel
+            # Always leave a sentinel so the drain loop can't block forever; any
+            # synth/LLM-stream error then surfaces via ``await producer`` below —
+            # a platform failure, reported as such, never as the agent's.
+            try:
+                async for frame in self.voice_io.synthesize_stream(tee()):
+                    await queue.put(frame)
+            finally:
+                await queue.put(None)  # sentinel
 
         producer = asyncio.create_task(produce())
         sent_any = False
@@ -188,17 +203,20 @@ class VoiceDuplexMixin:
                 ))
             if sent_any:
                 events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.ATA_SPEECH_STOP, party="ata"))
-            await connection.send(json.dumps({"type": "end_of_speech"}))  # ATA's turn is over
         finally:
-            await producer
+            await producer  # re-raises a producer error → caught by send_turn → ERROR
 
     async def _collect_agent_audio(
-        self, connection, timeout: float, start: float, audio_q: asyncio.Queue | None = None
+        self, connection, first_audio_timeout: float, start: float, audio_q: asyncio.Queue | None = None
     ) -> _AudioCapture:
-        """Continuous inbound loop: accumulate audio, run VAD, record timing + events.
+        """Run the AWAITING → LISTENING → ENDED states of a turn and capture the agent's audio.
 
-        If ``audio_q`` is given, each audio chunk is also pushed to it (with a final
-        ``None`` sentinel) so a concurrent STT consumer can transcribe as it arrives.
+        AWAITING waits up to ``first_audio_timeout`` for the agent to *start*; no speech by
+        then → a silent (no-response) turn. LISTENING captures until the speech→silence edge
+        (VAD quiet on PCM, an inter-frame ``silence_ms`` gap on WS, or an optional
+        end_of_speech). There is deliberately **no cap on how long the agent may speak** —
+        only silence ends its turn. If ``audio_q`` is given, chunks are pushed to it (with a
+        final ``None`` sentinel) for a concurrent STT consumer.
         """
         chunks: list[bytes] = []
         events: list[VoiceEvent] = []
@@ -206,11 +224,14 @@ class VoiceDuplexMixin:
         first_t: float | None = None
         last_t: float | None = None
         gaps: list[int] = []
-        vad_speaking = False
         is_pcm = False
+        silence_s = max(self.silence_ms / 1000.0, 0.05)
+        collect_started = time.perf_counter()
+        state = CallState.AWAITING
 
-        def finish(timed_out: bool) -> _AudioCapture:
-            if vad_speaking:
+        def finish() -> _AudioCapture:
+            # Reached speech → the agent spoke; still AWAITING → it never did (silent turn).
+            if state is CallState.LISTENING:
                 events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.AGENT_SPEECH_STOP, party="agent"))
             if audio_q is not None:
                 # Raw PCM is wrapped once here; per-frame WAV headers would corrupt the concat.
@@ -218,54 +239,81 @@ class VoiceDuplexMixin:
                     audio_q.put_nowait(self._pcm_to_wav(b"".join(chunks)))
                 audio_q.put_nowait(None)
             speech_ms = int((last_t - first_t) * 1000) if first_t is not None and last_t is not None else None
-            return _AudioCapture(b"".join(chunks), ttfa_ms, speech_ms, gaps, events, timed_out, is_pcm)
+            return _AudioCapture(
+                b"".join(chunks), ttfa_ms, speech_ms, gaps, events,
+                timed_out=state is not CallState.LISTENING, is_pcm=is_pcm,
+            )
 
-        collect_started = time.perf_counter()
+        def begin_listening(now: float) -> None:
+            nonlocal state, ttfa_ms, first_t
+            state = CallState.LISTENING
+            ttfa_ms = int((now - collect_started) * 1000)
+            first_t = now
+            events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.AGENT_SPEECH_START, party="agent"))
+
+        def note_gap(now: float) -> None:
+            if last_t is not None:
+                gap_ms = int((now - last_t) * 1000)
+                if gap_ms >= self.dead_air_gap_ms:
+                    gaps.append(gap_ms)
+
         while True:
-            remaining = timeout - (time.perf_counter() - collect_started)
-            if remaining <= 0:
-                return finish(True)
+            if state is CallState.AWAITING:
+                elapsed = time.perf_counter() - collect_started
+                if elapsed >= first_audio_timeout:  # agent never started → silent turn
+                    return finish()
+                window = max(first_audio_timeout - elapsed, 0.01)
+            else:  # LISTENING — a quiet gap this long is the agent's speech→silence edge
+                window = silence_s
             try:
-                raw = await asyncio.wait_for(connection.recv(), timeout=remaining)
+                raw = await asyncio.wait_for(connection.recv(), timeout=window)
             except TimeoutError:
-                return finish(True)
+                return finish()  # AWAITING → agent silent; LISTENING → it finished speaking
 
             try:
                 msg = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 continue
-
             mtype = msg.get("type")
-            if mtype in _END_SIGNALS:
-                return finish(False)
-            if mtype == "audio" and msg.get("data"):
-                try:
-                    chunk = base64.b64decode(msg["data"])
-                except (ValueError, TypeError):
-                    continue
-                is_pcm = msg.get("format") == "pcm"  # raw-PCM stream (telephony) vs. WAV frames (mock)
-                now = time.perf_counter()
-                if ttfa_ms is None:
-                    ttfa_ms = int((now - collect_started) * 1000)
-                    first_t = now
-                elif last_t is not None:
-                    gap_ms = int((now - last_t) * 1000)
-                    if gap_ms >= self.dead_air_gap_ms:
-                        gaps.append(gap_ms)
+            if mtype in _END_SIGNALS:  # optional early-end hint from a self-framing agent
+                return finish()
+            if mtype != "audio" or not msg.get("data"):
+                continue
+            try:
+                chunk = base64.b64decode(msg["data"])
+            except (ValueError, TypeError):
+                continue
+            is_pcm = msg.get("format") == "pcm"  # raw-PCM stream (telephony) vs. WAV frames (mock)
+            now = time.perf_counter()
+
+            # PCM / continuous stream: VAD marks speech boundaries. Leading silence keeps us
+            # AWAITING; a quiet edge once LISTENING is the agent's speech→silence endpoint.
+            if self.vad is not None and is_pcm:
+                quiet = (await self.vad.analyze(chunk)) == VadState.QUIET
+                if state is CallState.AWAITING:
+                    if quiet:
+                        continue  # not speaking yet — stay in AWAITING
+                    begin_listening(now)
+                elif quiet:
+                    last_t = now
+                    chunks.append(chunk)
+                    return finish()  # speech → quiet edge: turn over
+                else:
+                    note_gap(now)
                 last_t = now
                 chunks.append(chunk)
-                if audio_q is not None and not is_pcm:
-                    audio_q.put_nowait(chunk)  # PCM is wrapped once in finish()
+                continue
 
-                if self.vad is not None:
-                    state = await self.vad.analyze(chunk)
-                    if state == VadState.SPEAKING and not vad_speaking:
-                        vad_speaking = True
-                        events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.AGENT_SPEECH_START, party="agent"))
-                    elif state == VadState.QUIET and vad_speaking:
-                        vad_speaking = False
-                        events.append(VoiceEvent(t_ms=self._ms(start), kind=VoiceEventKind.AGENT_SPEECH_STOP, party="agent"))
-                        return finish(False)  # VAD endpoint: agent went quiet → turn over
+            # WS / WAV frames (no VAD): a frame arrives only when the agent speaks, so the
+            # first frame begins LISTENING and an inter-frame silence gap (above) ends it.
+            if state is CallState.AWAITING:
+                begin_listening(now)
+            else:
+                note_gap(now)
+            last_t = now
+            chunks.append(chunk)
+            if audio_q is not None and not is_pcm:
+                audio_q.put_nowait(chunk)  # PCM is wrapped once in finish()
 
     def _pcm_to_wav(self, pcm: bytes) -> bytes:
         """Wrap raw PCM16 mono @ sample_rate into a WAV container for the batch STT."""

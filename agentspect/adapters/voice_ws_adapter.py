@@ -30,6 +30,8 @@ class VoiceWebSocketAdapter(VoiceDuplexMixin, WebSocketConnectionMixin, Protocol
         timeout: float = 30.0,
         greeting_timeout: float | None = None,
         dead_air_gap_ms: int = _DEFAULT_DEAD_AIR_GAP_MS,
+        silence_ms: int = 700,
+        response_timeout: float = 15.0,
         vad: VadDetector | None = None,
     ):
         super().__init__(url, timeout)
@@ -37,6 +39,10 @@ class VoiceWebSocketAdapter(VoiceDuplexMixin, WebSocketConnectionMixin, Protocol
         # Agents that don't greet shouldn't stall the whole timeout.
         self.greeting_timeout = greeting_timeout if greeting_timeout is not None else min(timeout, 5.0)
         self.dead_air_gap_ms = dead_air_gap_ms
+        # Quiet gap that ends a turn (speech→silence), and how long to wait for the
+        # agent to *start* replying before treating the turn as silent.
+        self.silence_ms = silence_ms
+        self.response_timeout = min(response_timeout, timeout)
         self.vad = vad
         if vad is not None:
             self.sample_rate = vad.sample_rate

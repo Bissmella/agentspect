@@ -242,6 +242,42 @@ async def test_user_simulator_multiple_scenarios_parallel(
 
 
 @pytest.mark.asyncio
+async def test_voice_single_turn_silent_agent_is_no_response(
+    sample_world_state, mock_llm_client
+):
+    # Headline dead-agent case: a 1-turn voice scenario whose agent never speaks. After
+    # the nudges go unanswered it must be NO_RESPONSE even though it is the last turn.
+    from agentspect.models.transcript import AgentFailure, Transcript
+    from agentspect.agents.user_simulator import _NUDGE_MAX
+
+    scenario = Scenario(
+        id="silent", type=ScenarioType.POSITIVE, description="book",
+        turns=["Book me slot A"], persona="user_1",
+    )
+    adapter = MagicMock()
+    adapter.supports_token_stream = True  # marks a voice adapter
+    adapter.start_session = AsyncMock(return_value="s1")
+    adapter.end_session = AsyncMock()
+    adapter.send_turn = AsyncMock(return_value=Turn(
+        user_message="Book me slot A", agent_response="",
+        timestamp=datetime.now(UTC), latency_ms=10,
+    ))
+    adapter.create_transcript = MagicMock(return_value=Transcript(
+        scenario_id="silent", session_id="s1", protocol="voicewebsocket", turns=[],
+    ))
+
+    state = ATAGraphState(
+        current_batch_scenarios=[scenario], world_state=sample_world_state,
+        transcripts={}, verdicts={}, skipped_scenarios=set(),
+    )
+    result = await user_simulator_node(state, mock_llm_client, adapter)
+
+    assert adapter.send_turn.call_count == 1 + _NUDGE_MAX       # initial + nudges
+    saved = result["transcripts"]["silent"]
+    assert saved.turns[-1].agent_failure == AgentFailure.NO_RESPONSE
+
+
+@pytest.mark.asyncio
 async def test_user_simulator_agent_class(
     sample_world_state, sample_scenario, mock_adapter, mock_llm_client
 ):

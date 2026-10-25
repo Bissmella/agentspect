@@ -92,6 +92,11 @@ def _audio_frame(text: str) -> str:
     return json.dumps({"type": "audio", "data": base64.b64encode(text.encode()).decode()})
 
 
+def _pcm_frame(text: str) -> str:
+    # A raw-PCM (telephony) frame — VAD runs on these; WS WAV frames use silence timing.
+    return json.dumps({"type": "audio", "data": base64.b64encode(text.encode()).decode(), "format": "pcm"})
+
+
 _EOS = json.dumps({"type": "end_of_speech"})
 
 
@@ -609,7 +614,13 @@ def test_transcript_voice_events_flattens_turns():
 # ── Stage B1: VAD guard + duplex session ───────────────────────────────────────
 
 def test_silero_vad_detector_requires_extra():
-    # pipecat is not installed in the test env → actionable ImportError.
+    # Only meaningful without the extra: it asserts an actionable ImportError. In a
+    # voice-enabled env (pipecat installed) that path can't be exercised, so skip.
+    import importlib.util
+
+    if importlib.util.find_spec("pipecat") is not None:
+        pytest.skip("pipecat installed — the missing-extra path can't be exercised here")
+
     from agentspect.voice.vad import SileroVadDetector
 
     with pytest.raises(ImportError, match=r"agentspect\[pipecat\]"):
@@ -658,11 +669,11 @@ async def test_adapter_with_vad_emits_agent_speech_events():
 
 
 async def test_vad_ends_turn_without_end_of_speech_frame():
-    # A raw carrier stream never sends end_of_speech. The VAD speech→quiet edge must
-    # end the turn on its own (no trailing _EOS queued here).
+    # A raw carrier (PCM) stream never sends end_of_speech. The VAD speech→quiet edge
+    # must end the turn on its own (no trailing _EOS; VAD runs only on PCM frames).
     from agentspect.voice.vad import VadState
 
-    conn = FakeConnection([_EOS, _audio_frame("a"), _audio_frame("b")])  # no final _EOS
+    conn = FakeConnection([_EOS, _pcm_frame("a"), _pcm_frame("b")])  # no final _EOS
     adapter = VoiceWebSocketAdapter(
         url="wss://x", voice_io=_fake_voice_io(), timeout=5.0,
         vad=_ScriptedVad([VadState.SPEAKING, VadState.QUIET]),
@@ -675,7 +686,7 @@ async def test_vad_ends_turn_without_end_of_speech_frame():
     session_id = await adapter.start_session("s1")
     turn = await adapter.send_turn(session_id, "hello")
     assert turn.error is None
-    assert turn.agent_response == "ab"              # ended on VAD quiet, not a frame/timeout
+    assert turn.agent_response                       # transcribed; ended on VAD quiet, not timeout
     assert "agent_speech_stop" in _kinds(turn.voice_events)
     await adapter.close()
 
@@ -720,15 +731,155 @@ async def test_raw_pcm_frames_are_wrapped_to_wav_for_stt():
         assert w.getnchannels() == 1 and w.getframerate() == 16000
 
 
-async def test_adapter_without_vad_records_no_agent_speech_events():
-    # No VAD (thin voice, no pipecat) → ATA events only, no agent boundary events.
+async def test_pcm_vad_waits_for_speech_before_endpointing():
+    # Telephony: a continuous PCM stream opens with silence (VAD QUIET) before the agent
+    # speaks. The turn must NOT end on that leading silence — only on the speech→quiet
+    # edge — else a live agent is wrongly judged silent. Regression for the VAD gate.
+    from agentspect.voice.vad import VadState
+
+    conn = FakeConnection(
+        [_EOS, _pcm_frame("s"), _pcm_frame("s"), _pcm_frame("hello"), _pcm_frame("x")],
+        hang=True,
+    )
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=_fake_voice_io(), timeout=5.0,
+        vad=_ScriptedVad([VadState.QUIET, VadState.QUIET, VadState.SPEAKING, VadState.QUIET]),
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    assert turn.error is None
+    assert turn.agent_response                       # captured speech, not the leading silence
+    kinds = _kinds(turn.voice_events)
+    assert "agent_speech_start" in kinds and "agent_speech_stop" in kinds
+    await adapter.close()
+
+
+async def test_pcm_all_silence_is_a_silent_turn():
+    # Continuous PCM silence (agent never speaks): frames keep arriving, so endpointing
+    # can't rely on a recv gap — the time-based AWAIT budget expires → a blank turn with
+    # no false speech capture.
+    from agentspect.voice.vad import VadState
+
+    conn = FakeConnection([_EOS, _pcm_frame("s"), _pcm_frame("s")], hang=True)
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=_fake_voice_io(), timeout=5.0,
+        vad=_ScriptedVad([VadState.QUIET]), response_timeout=0.2,
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    assert turn.error is None
+    assert turn.agent_response == ""                 # never spoke → silent, no false capture
+    assert "agent_speech_start" not in _kinds(turn.voice_events)
+    await adapter.close()
+
+
+async def test_adapter_records_agent_speech_events_without_vad():
+    # No VAD (WS frames / thin voice) still yields a complete state timeline: the
+    # adapter marks when the agent started and stopped speaking (first frame → silence),
+    # so speaking/listening is tracked even without pipecat.
     conn = FakeConnection([_EOS, _audio_frame("a"), _EOS])
     adapter = _adapter_with(conn)
     session_id = await adapter.start_session("s1")
     turn = await adapter.send_turn(session_id, "hello")
     kinds = _kinds(turn.voice_events)
     assert "ata_speech_start" in kinds
-    assert "agent_speech_start" not in kinds
+    assert "agent_speech_start" in kinds
+    assert "agent_speech_stop" in kinds
+    await adapter.close()
+
+
+async def test_adapter_endpoints_on_silence_without_end_of_speech():
+    # WS agent speaks, then just stops — no end_of_speech frame. The turn must end on
+    # the inter-frame silence gap, and ATA must never send end_of_speech either.
+    conn = FakeConnection([_EOS, _audio_frame("You are booked.")], hang=True)
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=_fake_voice_io(), timeout=5.0, silence_ms=100
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "I'd like slot A")
+    assert turn.error is None
+    assert turn.agent_response == "You are booked."     # endpointed on silence, no _EOS
+    assert all(json.loads(m).get("type") != "end_of_speech" for m in conn.sent)
+    await adapter.close()
+
+
+async def test_listening_is_not_cut_off_by_a_short_timeout():
+    # The agent may talk longer than `timeout`; only silence ends its turn, never a
+    # stopwatch. Regression: a prior hard cap truncated the agent mid-speech.
+    import asyncio
+
+    class _PacedConnection:
+        def __init__(self, frames, gap):
+            self._frames = list(frames)
+            self._gap = gap
+            self.sent = []
+
+        async def send(self, m):
+            self.sent.append(m)
+
+        async def recv(self):
+            if self._frames:
+                await asyncio.sleep(self._gap)
+                return self._frames.pop(0)
+            await asyncio.sleep(3600)  # then go quiet → LISTENING inter-frame gap ends it
+
+        async def close(self):
+            pass
+
+    frames = [_EOS] + [_audio_frame(c) for c in "abcdefgh"]  # _EOS = greeting
+    conn = _PacedConnection(frames, gap=0.05)                # 8 speech frames over ~0.4s
+    adapter = VoiceWebSocketAdapter(
+        url="wss://x", voice_io=_fake_voice_io(), timeout=0.2, silence_ms=120
+    )
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")           # greeting consumes _EOS
+    turn = await adapter.send_turn(session_id, "go")
+    assert turn.error is None
+    assert turn.agent_response == "abcdefgh"                  # full speech, not truncated at 0.2s
+    await adapter.close()
+
+
+async def test_adapter_outbound_synth_error_is_platform_error_not_agent_failure():
+    # Our own TTS/stream raising is a PLATFORM failure (Turn.error) — never charged to
+    # the agent as a failure. It must surface promptly, not hang.
+    import asyncio
+
+    class BoomTTS(FakeTTS):
+        async def synthesize(self, text, *, voice=None, language=None, accent=None) -> bytes:
+            raise RuntimeError("tts provider down")
+
+    vio = VoiceIO(stt=FakeSTT(), tts=BoomTTS(),
+                  defaults=VoiceIODefaults(voice="alloy", language="en", accent=None))
+    conn = FakeConnection([_EOS], hang=True)
+    adapter = VoiceWebSocketAdapter(url="wss://x", voice_io=vio, timeout=2.0, silence_ms=100)
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await asyncio.wait_for(adapter.send_turn(session_id, "hello"), timeout=5.0)
+    assert turn.error is not None          # platform failure surfaced
+    assert turn.agent_failure is None      # not blamed on the agent
     await adapter.close()
 
 

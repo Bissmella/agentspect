@@ -9,6 +9,14 @@ from agentspect.models.transcript import AgentFailure, Transcript
 from agentspect.models.world_state import WorldState
 from agentspect.services.placeholder import PlaceholderResolutionError, resolve_placeholders
 
+# Voice only: how a human caller reacts to a silent agent before hanging up. With the
+# adapter's ~15s wait-for-reply, two nudges put the give-up point around 40-45s.
+_NUDGE_MAX = 2
+_NUDGE_LINES = [
+    "Hello? Are you still there?",
+    "I still can't hear anything — I'll have to end the call if there's no response.",
+]
+
 
 def _build_persona_prompt(scenario: Scenario, world_state: WorldState) -> str:
     import json
@@ -119,7 +127,7 @@ async def _run_single_scenario(
             # streaming (voice) adapter on an adapted turn — the LLM token stream
             # itself, so tokens flow straight into streaming TTS.
             message: str | Any = user_message
-            streaming = getattr(adapter, "supports_token_stream", False)
+            is_voice = getattr(adapter, "supports_token_stream", False)  # only the voice mixin sets this
             if i > 0 and conversation_history:
                 system_prompt = _build_persona_prompt(scenario, world_state)
                 last_agent_response = conversation_history[-1]['content'] if conversation_history else ''
@@ -143,7 +151,7 @@ IMPORTANT: Use your real persona data (phone, name, etc.) - do not make up value
 Return ONLY the message you want to send. No explanations or quotes.""",
                     },
                 ]
-                if streaming:
+                if is_voice:
                     message = llm_client.chat_stream(adapt_messages, temperature=0.3)
                 else:
                     response = await llm_client.chat(adapt_messages, temperature=0.3)
@@ -151,14 +159,27 @@ Return ONLY the message you want to send. No explanations or quotes.""",
                     message = user_message
 
             is_last_turn = i == len(scenario.turns) - 1
-            turn = await adapter.send_turn(session_id, message)
-            # For a streamed turn, recover what was actually said from the adapter.
-            if not isinstance(message, str):
-                user_message = turn.user_message or user_message
 
-            
-            blank = not turn.agent_response.strip()
-            if turn.error is None and turn.agent_failure is None and blank and not is_last_turn:
+            # Send the turn; on a voice call, nudge a silent agent like a human would
+            # before giving up — only after the nudges go unanswered is it a failure.
+            nudges = 0
+            while True:
+                turn = await adapter.send_turn(session_id, message)
+                # For a streamed turn, recover what was actually said from the adapter.
+                if not isinstance(message, str):
+                    user_message = turn.user_message or user_message
+                blank = not turn.agent_response.strip()
+                if (is_voice and blank and turn.error is None
+                        and turn.agent_failure is None and nudges < _NUDGE_MAX):
+                    transcript.add_turn(turn)  # record the silence + the nudge we tried
+                    message = _NUDGE_LINES[nudges]
+                    user_message = message
+                    nudges += 1
+                    continue
+                break
+
+            # A blank reply is a non-response failure.
+            if turn.error is None and turn.agent_failure is None and blank and (is_voice or not is_last_turn):
                 turn.agent_failure = AgentFailure.NO_RESPONSE
 
             if turn.agent_failure == AgentFailure.DISCONNECTED and is_last_turn:

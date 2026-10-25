@@ -50,13 +50,16 @@ class TTSSpec(BaseModel):
 
 
 class EndpointingSpec(BaseModel):
-    """How ATA decides the agent finished speaking.
-    mode: signal|vad  signal uses end_of_speech control frame
-    and vad uses Pipcat's VAD when the extra is installed.
-    silence_ms: fallback timeout.
+    """How ATA decides a speaker finished — like a real call, not a control frame.
+
+    mode: 'vad' (default) ends a turn on the speech→silence edge (VAD on a
+    continuous stream, or an inter-frame silence gap on a frame protocol); neither
+    side sends or needs an end_of_speech signal. 'signal' is a legacy opt-in for
+    self-framing WS agents that do emit end_of_speech.
+    silence_ms: how long of quiet marks the end of a turn.
     """
 
-    mode: str = Field(default="signal", pattern=r"^(signal|vad)$")
+    mode: str = Field(default="vad", pattern=r"^(signal|vad)$")
     silence_ms: int = Field(default=700, ge=0)
 
 

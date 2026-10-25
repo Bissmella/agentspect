@@ -2,9 +2,17 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 from pydantic import BaseModel
 
 from agentspect.config import settings
+
+# Request timeout for every LLM call, streaming included. The read timeout bounds
+# the gap *between* streamed chunks, so a provider that opens a stream then goes
+# silent raises instead of hanging forever (the SDK default is 600s). A stalled
+# LLM call is a platform failure — surfacing it promptly keeps it out of the
+# agent's verdict.
+_LLM_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 
 
 class LLMResponse(BaseModel):
@@ -55,7 +63,9 @@ class AnthropicClient(LLMClient):
         import anthropic
 
         self.model = model
-        self.client = anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
+        self.client = anthropic.AsyncAnthropic(
+            api_key=api_key or settings.anthropic_api_key, timeout=_LLM_TIMEOUT
+        )
 
     async def chat(
         self,
@@ -157,7 +167,9 @@ class OpenAIClient(LLMClient):
         import openai
 
         self.model = model
-        self.client = openai.AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.client = openai.AsyncOpenAI(
+            api_key=api_key or settings.openai_api_key, timeout=_LLM_TIMEOUT
+        )
 
     async def chat(
         self,
@@ -241,7 +253,8 @@ class OpenAICompatibleClient(LLMClient):
         self.model = model
         self.client = openai.AsyncOpenAI(
             base_url=base_url,
-            api_key=api_key or "ollama"
+            api_key=api_key or "ollama",
+            timeout=_LLM_TIMEOUT,
         )
 
     async def chat(self, messages, tools=None, temperature=0.7, max_tokens=4096) -> LLMResponse:
