@@ -88,22 +88,52 @@ async def test_scenario_generator_success(sample_state, mock_llm_client):
 
 
 @pytest.mark.asyncio
-async def test_scenario_generator_count_mismatch(sample_state, mock_llm_client):
+async def test_scenario_generator_short_count_warns_not_fails(sample_state, mock_llm_client):
+    # LLM keeps returning only 1 positive (0 negative) though 1/1 was asked. After the
+    # retries it accepts what it has with a warning — it must NOT nuke the whole suite.
     mock_llm_client.chat_with_structured_output.return_value = GeneratedScenarios(
         scenarios=[
-            GeneratedScenario(
-                id="positive-1",
-                type="positive",
-                description="Test",
-                turns=["Hello"],
-            ),
+            GeneratedScenario(id="positive-1", type="positive", description="Test", turns=["Hello"]),
         ]
     )
 
     result = await scenario_generator_node(sample_state, mock_llm_client)
 
+    assert result["status"] == "scenarios_generated"
+    assert len(result["scenarios"]) == 1
+    assert "0 of 1 negative" in result.get("warning", "")
+    assert mock_llm_client.chat_with_structured_output.await_count >= 2  # retried first
+
+
+@pytest.mark.asyncio
+async def test_scenario_generator_tops_up_on_retry(sample_state, mock_llm_client):
+    # First call is short (positive only); the top-up retry supplies the missing negative,
+    # so the suite reaches the full count with no warning.
+    first = GeneratedScenarios(scenarios=[
+        GeneratedScenario(id="p1", type="positive", description="book", turns=["Hi"]),
+    ])
+    second = GeneratedScenarios(scenarios=[
+        GeneratedScenario(id="n1", type="negative", description="refuse", turns=["bad"]),
+    ])
+    mock_llm_client.chat_with_structured_output = AsyncMock(side_effect=[first, second])
+
+    result = await scenario_generator_node(sample_state, mock_llm_client)
+
+    assert result["status"] == "scenarios_generated"
+    assert result.get("warning") is None
+    assert {s.id for s in result["scenarios"]} == {"p1", "n1"}
+    assert mock_llm_client.chat_with_structured_output.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scenario_generator_zero_scenarios_fails(sample_state, mock_llm_client):
+    # Nothing at all to run is the one true failure.
+    mock_llm_client.chat_with_structured_output.return_value = GeneratedScenarios(scenarios=[])
+
+    result = await scenario_generator_node(sample_state, mock_llm_client)
+
     assert result["status"] == "failed"
-    assert "negative scenarios" in result["error"]
+    assert "no scenarios" in result["error"].lower()
 
 
 @pytest.mark.asyncio

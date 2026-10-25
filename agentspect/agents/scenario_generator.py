@@ -199,37 +199,49 @@ Remember:
 Return structured output with a 'scenarios' array."""
 
 
+_MAX_GEN_ATTEMPTS = 3  # initial call + up to 2 top-ups before accepting what we have
+
+
 async def scenario_generator_node(
     state: ATAGraphState, llm_client: LLMClient
 ) -> dict[str, Any]:
-    system_prompt = _build_system_prompt(state)
-    messages = [
-        {"role": "system", "content": system_prompt},
+    test_config = state["test_config"]
+    want_pos, want_neg = test_config.positive, test_config.negative
+    base_messages = [
+        {"role": "system", "content": _build_system_prompt(state)},
         {"role": "user", "content": _build_user_prompt()},
     ]
 
     try:
-        result = await llm_client.chat_with_structured_output(
-            messages, GeneratedScenarios, temperature=0.7
-        )
+        scenarios: list = []
+        for _ in range(_MAX_GEN_ATTEMPTS):
+            have_pos = sum(1 for s in scenarios if s.type == ScenarioType.POSITIVE)
+            have_neg = sum(1 for s in scenarios if s.type == ScenarioType.NEGATIVE)
+            if have_pos >= want_pos and have_neg >= want_neg:
+                break
+            messages = base_messages
+            if scenarios:  # top-up ask: only the missing count, meaningfully different
+                messages = base_messages + [{
+                    "role": "user",
+                    "content": (
+                        f"So far you produced {have_pos}/{want_pos} positive and "
+                        f"{have_neg}/{want_neg} negative scenarios. Generate ONLY "
+                        f"{max(want_pos - have_pos, 0)} more positive and "
+                        f"{max(want_neg - have_neg, 0)} more negative scenarios, each "
+                        f"meaningfully different from the earlier ones, with new unique ids."
+                    ),
+                }]
+            result = await llm_client.chat_with_structured_output(
+                messages, GeneratedScenarios, temperature=0.7
+            )
+            seen = {s.id for s in scenarios}
+            for gen in result.scenarios:
+                sc = _convert_scenario(gen)
+                if sc.id not in seen:
+                    scenarios.append(sc)
+                    seen.add(sc.id)
 
-        scenarios = [_convert_scenario(s) for s in result.scenarios]
-
-        test_config = state["test_config"]
-        positive_count = sum(1 for s in scenarios if s.type == ScenarioType.POSITIVE)
-        negative_count = sum(1 for s in scenarios if s.type == ScenarioType.NEGATIVE)
-
-        if positive_count < test_config.positive:
-            return {
-                "error": f"Generated {positive_count} positive scenarios, expected {test_config.positive}",
-                "status": "failed",
-            }
-        if negative_count < test_config.negative:
-            return {
-                "error": f"Generated {negative_count} negative scenarios, expected {test_config.negative}",
-                "status": "failed",
-            }
-
+        # Placeholder validity is a correctness gate, not a count one — still hard-fail.
         world_state_data = state["world_state_input"].model_dump()
         for scenario in scenarios:
             for turn in scenario.turns:
@@ -240,14 +252,32 @@ async def scenario_generator_node(
                         "status": "failed",
                     }
 
-        dag = build_dag(scenarios)
-        batches = topological_batches(scenarios)
+        if not scenarios:  # nothing at all to run — the only true failure
+            return {
+                "error": f"Generated no scenarios (expected {want_pos} positive, {want_neg} negative)",
+                "status": "failed",
+            }
 
-        return {
+        pos = sum(1 for s in scenarios if s.type == ScenarioType.POSITIVE)
+        neg = sum(1 for s in scenarios if s.type == ScenarioType.NEGATIVE)
+        warning = None
+        if pos < want_pos or neg < want_neg:
+            warning = (
+                f"Generated {pos} of {want_pos} positive and {neg} of {want_neg} negative "
+                f"scenarios — the world_state may not support more distinct cases. "
+                f"Running with what was generated."
+            )
+
+        build_dag(scenarios)  # validates depends_on references
+        batches = topological_batches(scenarios)
+        out: dict[str, Any] = {
             "scenarios": scenarios,
             "scenario_batches": batches,
             "status": "scenarios_generated",
         }
+        if warning:
+            out["warning"] = warning
+        return out
 
     except Exception as e:
         return {

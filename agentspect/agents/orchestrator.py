@@ -407,6 +407,9 @@ class OrchestratorAgent:
             raise RuntimeError(f"Scenario generation failed: {error_msg}")
 
         scenarios = merged["scenarios"]
+        self.generation_warning = merged.get("warning")
+        if self.generation_warning:
+            self._emit_progress("generation_warning", {"warning": self.generation_warning})
         self._emit_progress("scenarios_generated", {"count": len(scenarios)})
         return [s.model_dump(mode="json") for s in scenarios]
 
