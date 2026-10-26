@@ -182,10 +182,10 @@ def build_graph(
         },
     )
 
-    graph.add_edge("user_simulator", "scorer")
-    graph.add_edge("scorer", "world_state_patcher")
+    graph.add_edge("user_simulator", "world_state_patcher")
+    graph.add_edge("world_state_patcher", "scorer")
 
-    graph.add_edge("world_state_patcher", "advance_batch")
+    graph.add_edge("scorer", "advance_batch")
 
     graph.add_edge("advance_batch", "prepare_batch")
     graph.add_edge("reporter", END)
@@ -220,9 +220,10 @@ def build_execute_graph(llm_client: LLMClient, adapter: ProtocolAdapter) -> Stat
         _should_continue_after_prepare,
         {"user_simulator": "user_simulator", "reporter": "reporter"},
     )
-    graph.add_edge("user_simulator", "scorer")
-    graph.add_edge("scorer", "world_state_patcher")
-    graph.add_edge("world_state_patcher", "advance_batch")
+    # Patcher before scorer — see build_graph: world_state assertions need the snapshots.
+    graph.add_edge("user_simulator", "world_state_patcher")
+    graph.add_edge("world_state_patcher", "scorer")
+    graph.add_edge("scorer", "advance_batch")
     graph.add_edge("advance_batch", "prepare_batch")
     graph.add_edge("reporter", END)
     return graph

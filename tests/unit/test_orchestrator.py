@@ -394,3 +394,18 @@ class TestGenerateExecuteSplit:
         assert scenarios[0]["type"] == "positive"
         assert scenarios[0]["turns"] == ["Hi, I'd like to book a slot."]
         assert scenarios[1]["assertions"][0]["type"] == "behavioral"
+
+
+def test_patcher_runs_before_scorer_so_world_state_assertions_have_snapshots():
+    # The scorer evaluates world_state assertions against the before/after snapshots the
+    # patcher writes. If the scorer ran first (the old order) every stateful assertion was
+    # scored against empty snapshots and always MISSed. Guard the edge order.
+    from agentspect.agents.orchestrator import build_execute_graph
+
+    g = build_execute_graph(MagicMock(), MagicMock())
+    edges = {(s, e) for s, e in g.edges}
+    assert ("user_simulator", "world_state_patcher") in edges
+    assert ("world_state_patcher", "scorer") in edges
+    assert ("scorer", "advance_batch") in edges
+    # the reverse (scorer before patcher) must be gone
+    assert ("scorer", "world_state_patcher") not in edges

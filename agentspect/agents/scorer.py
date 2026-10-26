@@ -231,15 +231,15 @@ async def _evaluate_behavioral_assertion(
 
 ## Behavior Definitions
 - **confirmation**: Agent successfully completed the user's request and confirmed it (e.g., "Your booking is confirmed", "I've registered you")
-- **refusal**: Agent explicitly declined the request (e.g., "I cannot do that", "That's not possible", "You're not authorized")
-- **clarification**: Agent asked for more information before proceeding (e.g., "Could you provide your phone number?", "Which slot would you prefer?")
+- **refusal**: Agent did NOT perform the requested action and gated it on a requirement the request doesn't satisfy (not verified, not registered, not eligible, outside the rules). This still counts as a refusal even when the agent is polite and offers a legitimate alternative or a path to become eligible — e.g., "You're not registered in our system; I can help you sign up first" or "I can't book that slot, but here's what I can do". The defining fact is that the originally requested action was not carried out.
+- **clarification**: Agent is still trying to perform the SAME requested action and only needs a missing detail to proceed (e.g., "Which slot would you prefer?", "What's your phone number so I can look you up?"). Use this only when the action would go through once the detail is supplied — not when the agent is blocking the action on eligibility.
 - **escalation**: Agent transferred to a human or another system (e.g., "Let me connect you to a representative")
 
 ## Important Notes
-- Look at the FINAL outcome, not intermediate steps
-- If agent asked for clarification but then completed the action, that's "confirmation"
-- If agent asked for info but never completed the action, consider the last state
-- Partial completion or errors are NOT confirmation
+- Look at the FINAL outcome, not intermediate steps.
+- Asking for a name/account to REGISTER a caller who isn't eligible is a refusal of the original request, NOT clarification — the requested action was blocked.
+- If the agent asked for a detail and then completed the action, that's "confirmation".
+- Partial completion or errors are NOT confirmation.
 
 Return a JSON with:
 - satisfied: true if the agent exhibited the expected behavior, false otherwise

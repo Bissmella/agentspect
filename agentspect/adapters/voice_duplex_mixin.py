@@ -243,7 +243,10 @@ class VoiceDuplexMixin:
                 if wav:
                     audio_q.put_nowait(wav)
                 audio_q.put_nowait(None)
-            speech_ms = int((last_t - first_t) * 1000) if first_t is not None and last_t is not None else None
+            # Talk time is the captured audio's own duration, not the frame-arrival span
+            speech_ms = self._wav_duration_ms(wav)
+            if speech_ms is None and first_t is not None and last_t is not None:
+                speech_ms = int((last_t - first_t) * 1000)
             return _AudioCapture(
                 wav, ttfa_ms, speech_ms, gaps, events,
                 timed_out=state is not CallState.LISTENING, is_pcm=is_pcm,
@@ -332,6 +335,18 @@ class VoiceDuplexMixin:
         """One valid WAV from per-frame WAV containers; raw-concat fallback for
         non-WAV frames (a raw stream, or a test fake that isn't a real WAV)."""
         return self._frames_to_wav(frames) or b"".join(frames)
+
+    @staticmethod
+    def _wav_duration_ms(wav: bytes) -> int | None:
+        """Audio duration of a WAV in ms, or None if the bytes aren't a readable WAV."""
+        if not wav:
+            return None
+        try:
+            with wave.open(io.BytesIO(wav), "rb") as w:
+                rate = w.getframerate()
+                return int(w.getnframes() / rate * 1000) if rate else None
+        except (wave.Error, EOFError):
+            return None
 
     @staticmethod
     def _frames_to_wav(frames: list[bytes]) -> bytes:

@@ -787,6 +787,35 @@ async def test_multi_wav_frames_are_rejoined_into_one_valid_wav_for_stt():
     await adapter.close()
 
 
+async def test_agent_speech_ms_is_audio_duration_not_frame_arrival_span():
+    # Talk time must be the audio's own duration — a single-frame reply has ~0 arrival
+    # span but is clearly non-zero speech. Regression for "agent talk time: 0 ms".
+    import io
+    import struct
+    import wave
+
+    def _wav(nframes: int) -> str:  # nframes @16k → nframes/16 ms of audio
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b"".join(struct.pack("<h", 1000) for _ in range(nframes)))
+        return json.dumps({"type": "audio", "data": base64.b64encode(buf.getvalue()).decode(), "format": "wav"})
+
+    conn = FakeConnection([_EOS, _wav(16000)], hang=True)  # one 1000 ms frame
+    adapter = VoiceWebSocketAdapter(url="wss://x", voice_io=_fake_voice_io(), timeout=5.0, silence_ms=100)
+
+    async def fake_open(url):
+        return conn
+
+    adapter._open_connection = fake_open
+    session_id = await adapter.start_session("s1")
+    turn = await adapter.send_turn(session_id, "hello")
+    assert turn.voice.agent_speech_ms == 1000  # the audio's duration, not ~0 arrival span
+    await adapter.close()
+
+
 async def test_pcm_vad_waits_for_speech_before_endpointing():
     # Telephony: a continuous PCM stream opens with silence (VAD QUIET) before the agent
     # speaks. The turn must NOT end on that leading silence — only on the speech→quiet
