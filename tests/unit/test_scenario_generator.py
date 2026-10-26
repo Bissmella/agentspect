@@ -126,6 +126,36 @@ async def test_scenario_generator_tops_up_on_retry(sample_state, mock_llm_client
 
 
 @pytest.mark.asyncio
+async def test_scenario_generator_retries_past_a_malformed_generation(sample_state, mock_llm_client):
+    # A single malformed generation (model emits a broken scenarios array → raises) must not
+    # kill the run; the loop retries and the next attempt succeeds.
+    good = GeneratedScenarios(scenarios=[
+        GeneratedScenario(id="p1", type="positive", description="book", turns=["Hi"]),
+        GeneratedScenario(id="n1", type="negative", description="refuse", turns=["bad"]),
+    ])
+    mock_llm_client.chat_with_structured_output = AsyncMock(
+        side_effect=[ValueError("malformed scenarios array"), good]
+    )
+
+    result = await scenario_generator_node(sample_state, mock_llm_client)
+
+    assert result["status"] == "scenarios_generated"
+    assert {s.id for s in result["scenarios"]} == {"p1", "n1"}
+    assert mock_llm_client.chat_with_structured_output.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scenario_generator_all_attempts_malformed_fails_with_detail(sample_state, mock_llm_client):
+    mock_llm_client.chat_with_structured_output = AsyncMock(side_effect=ValueError("boom"))
+
+    result = await scenario_generator_node(sample_state, mock_llm_client)
+
+    assert result["status"] == "failed"
+    assert "no scenarios" in result["error"].lower()
+    assert "boom" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_scenario_generator_zero_scenarios_fails(sample_state, mock_llm_client):
     # Nothing at all to run is the one true failure.
     mock_llm_client.chat_with_structured_output.return_value = GeneratedScenarios(scenarios=[])

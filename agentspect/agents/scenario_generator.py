@@ -225,6 +225,7 @@ async def scenario_generator_node(
 
     try:
         scenarios: list = []
+        last_gen_error: Exception | None = None
         for _ in range(_MAX_GEN_ATTEMPTS):
             have_pos = sum(1 for s in scenarios if s.type == ScenarioType.POSITIVE)
             have_neg = sum(1 for s in scenarios if s.type == ScenarioType.NEGATIVE)
@@ -242,9 +243,15 @@ async def scenario_generator_node(
                         f"meaningfully different from the earlier ones, with new unique ids."
                     ),
                 }]
-            result = await llm_client.chat_with_structured_output(
-                messages, GeneratedScenarios, temperature=0.7
-            )
+            try:
+                result = await llm_client.chat_with_structured_output(
+                    messages, GeneratedScenarios, temperature=0.7
+                )
+            except Exception as e:
+                # A single malformed/failed generation (e.g. the model emits a broken
+                # scenarios array) must not kill the run — the loop just retries.
+                last_gen_error = e
+                continue
             seen = {s.id for s in scenarios}
             for gen in result.scenarios:
                 sc = _convert_scenario(gen)
@@ -264,8 +271,9 @@ async def scenario_generator_node(
                     }
 
         if not scenarios:  # nothing at all to run — the only true failure
+            detail = f" (last generation error: {last_gen_error})" if last_gen_error else ""
             return {
-                "error": f"Generated no scenarios (expected {want_pos} positive, {want_neg} negative)",
+                "error": f"Generated no scenarios (expected {want_pos} positive, {want_neg} negative){detail}",
                 "status": "failed",
             }
 
