@@ -396,6 +396,7 @@ def _apply_verdict_flow(
     run_success: bool,
     scenarios_map: dict[str, Scenario],
     verdicts: dict[str, ScenarioVerdict],
+    state_changed: bool = False,
 ) -> Verdict:
     if scenario.type == ScenarioType.POSITIVE:
         if not run_success:
@@ -425,19 +426,19 @@ def _apply_verdict_flow(
         if run_success:
             return Verdict.SUCCESS
 
-        has_stateful_effects = any(
-            isinstance(a, WorldStateAssertion) for a in scenario.assertions
+        # The agent did not clearly refuse — but a negative scenario is a real breach only
+        # if the forbidden ACTION actually occurred. Words alone (deflection, "that slot is
+        # taken", offering an alternative) are not proof. We FAILURE only when there is
+        # evidence of the action: an observed state change, or a defensive probe standing by
+        # to verify state (which keeps the FAILURE → FAILURE_CORRUPT path intact). Otherwise
+        # the boundary held in substance → SUCCESS.
+        has_defensive_probe = any(
+            s.depends_on == scenario.id and s.depends_on_type == DependsOnType.DEFENSIVE_PROBE
+            for s in scenarios_map.values()
         )
-        if has_stateful_effects:
-            dependents = [
-                s for s in scenarios_map.values()
-                if s.depends_on == scenario.id and s.depends_on_type == DependsOnType.DEFENSIVE_PROBE
-            ]
-            if dependents:
-                return Verdict.FAILURE
+        if state_changed or has_defensive_probe:
             return Verdict.FAILURE
-        else:
-            return Verdict.FAILURE
+        return Verdict.SUCCESS
 
 
 def _check_probe_result(
@@ -445,21 +446,28 @@ def _check_probe_result(
     probe_verdict: ScenarioVerdict,
     parent_verdict: ScenarioVerdict,
 ) -> Verdict:
+    # Probe verdicts follow the same convention as every scenario: SUCCESS means the
+    # probe's assertions — which describe the CORRECT expected behaviour — were satisfied.
     if probe_scenario.depends_on_type == DependsOnType.PROBE:
         # A probe only verifies a parent that actually succeeded (and is awaiting
         # verification).
         if parent_verdict.verdict != Verdict.SUCCESS_UNVERIFIED:
             return parent_verdict.verdict
-        probe_failed = probe_verdict.verdict in (Verdict.FAILURE, Verdict.ERROR)
-        return Verdict.SUCCESS if probe_failed else Verdict.SUSPECT
+        if probe_verdict.verdict == Verdict.ERROR:
+            return parent_verdict.verdict  # could not verify → stays SUCCESS_UNVERIFIED
+        # Probe refused the re-attempt (assertions held → SUCCESS) → state persisted → SUCCESS.
+        # Probe re-did the action (assertions failed → FAILURE) → state did not hold → SUSPECT.
+        return Verdict.SUCCESS if probe_verdict.verdict == Verdict.SUCCESS else Verdict.SUSPECT
 
     elif probe_scenario.depends_on_type == DependsOnType.DEFENSIVE_PROBE:
         # A defensive probe only matters when the negative scenario failed (the agent
         # wrongly accepted). If the agent correctly refused, there is nothing to corrupt.
         if parent_verdict.verdict != Verdict.FAILURE:
             return parent_verdict.verdict
-        probe_detected_corruption = probe_verdict.verdict == Verdict.SUCCESS
-        return Verdict.FAILURE_CORRUPT if probe_detected_corruption else Verdict.FAILURE
+        # Defensive-probe assertions describe a CLEAN state. Satisfied (SUCCESS) → nothing
+        # persisted → FAILURE. Violated (FAILURE) → the invalid action left a trace → CORRUPT.
+        # An errored probe stays FAILURE: never claim corruption we could not verify.
+        return Verdict.FAILURE_CORRUPT if probe_verdict.verdict == Verdict.FAILURE else Verdict.FAILURE
 
     return parent_verdict.verdict
 
@@ -542,7 +550,8 @@ async def scorer_node(
                     assertion_results=parent_verdict.assertion_results,
                 )
 
-        verdict = _apply_verdict_flow(scenario, run_success, scenarios_map, verdicts)
+        state_changed = bool(before_snapshot) and before_snapshot != after_snapshot
+        verdict = _apply_verdict_flow(scenario, run_success, scenarios_map, verdicts, state_changed)
 
         recovery_quality = None
         if scenario.type == ScenarioType.NEGATIVE and verdict == Verdict.SUCCESS:
@@ -558,6 +567,8 @@ async def scorer_node(
         )
         if agent_failure is not None:
             reason += f"; agent failure: {agent_failure.value}"
+        if scenario.type == ScenarioType.NEGATIVE and not run_success and verdict == Verdict.SUCCESS:
+            reason += " — no forbidden action occurred (no state change); verbal deflection is not a breach"
 
         verdicts[scenario.id] = ScenarioVerdict(
             scenario_id=scenario.id,

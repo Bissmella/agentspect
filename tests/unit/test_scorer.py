@@ -237,6 +237,57 @@ async def test_scorer_negative_scenario_success(mock_llm_client, sample_transcri
     assert verdict.verdict == Verdict.SUCCESS
 
 
+def _negative_refusal_scenario(sid="neg"):
+    return Scenario(
+        id=sid, type=ScenarioType.NEGATIVE, description="Unregistered caller tries to book",
+        turns=["book me in"],
+        assertions=[BehavioralAssertion(description="Agent refuses", expected_behavior="refusal")],
+    )
+
+
+def _one_turn_transcript(sid):
+    return Transcript(
+        scenario_id=sid, session_id="s", protocol="http",
+        turns=[Turn(user_message="book me in", agent_response="That slot is taken, want 2pm?",
+                    timestamp=datetime.now(UTC), latency_ms=10)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_negative_verbal_deflection_without_state_change_is_not_a_failure(mock_llm_client):
+    # Agent didn't clearly refuse (offered an alternative) but never booked → not a breach.
+    mock_llm_client.chat_with_structured_output.return_value = AssertionResult(
+        satisfied=False, reasoning="Offered an alternative rather than refusing outright"
+    )
+    sc = _negative_refusal_scenario()
+    state = ATAGraphState(
+        current_batch_scenarios=[sc], scenarios=[sc],
+        transcripts={"neg": _one_turn_transcript("neg")},
+        verdicts={}, world_state_snapshots={}, skipped_scenarios=set(),
+    )
+    verdict = (await scorer_node(state, mock_llm_client))["verdicts"]["neg"]
+    assert verdict.verdict == Verdict.SUCCESS
+    assert "no forbidden action" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_negative_not_refused_with_state_change_is_a_failure(mock_llm_client):
+    # Same wording failure, but a state change proves the forbidden action happened → FAILURE.
+    mock_llm_client.chat_with_structured_output.return_value = AssertionResult(
+        satisfied=False, reasoning="Agent booked without registration"
+    )
+    sc = _negative_refusal_scenario("neg2")
+    state = ATAGraphState(
+        current_batch_scenarios=[sc], scenarios=[sc],
+        transcripts={"neg2": _one_turn_transcript("neg2")},
+        verdicts={},
+        world_state_snapshots={"neg2_before": {"slots": ["A"]}, "neg2_after": {"slots": []}},
+        skipped_scenarios=set(),
+    )
+    verdict = (await scorer_node(state, mock_llm_client))["verdicts"]["neg2"]
+    assert verdict.verdict == Verdict.FAILURE
+
+
 @pytest.mark.asyncio
 async def test_scorer_no_transcript(mock_llm_client, sample_scenario):
     state = ATAGraphState(
@@ -365,18 +416,23 @@ def test_probe_does_not_upgrade_a_parent_that_already_failed():
 
 def test_probe_confirms_or_suspects_only_an_unverified_parent():
     unv = _verdict(Verdict.SUCCESS_UNVERIFIED)
-    # Parent succeeded, probe failed to rebook → confirmed SUCCESS.
-    assert _check_probe_result(_probe(DependsOnType.PROBE), _verdict(Verdict.FAILURE), unv) == Verdict.SUCCESS
-    # Parent succeeded, probe rebooked (state didn't hold) → SUSPECT.
-    assert _check_probe_result(_probe(DependsOnType.PROBE), _verdict(Verdict.SUCCESS), unv) == Verdict.SUSPECT
+    # Probe's refusal assertion held (verdict SUCCESS) → agent refused the repeat →
+    # state persisted → confirmed SUCCESS.
+    assert _check_probe_result(_probe(DependsOnType.PROBE), _verdict(Verdict.SUCCESS), unv) == Verdict.SUCCESS
+    # Probe re-did the action (refusal assertion failed → FAILURE) → state didn't hold → SUSPECT.
+    assert _check_probe_result(_probe(DependsOnType.PROBE), _verdict(Verdict.FAILURE), unv) == Verdict.SUSPECT
+    # An errored probe verifies nothing → parent stays unverified.
+    assert _check_probe_result(_probe(DependsOnType.PROBE), _verdict(Verdict.ERROR), unv) == Verdict.SUCCESS_UNVERIFIED
 
 
 def test_defensive_probe_only_applies_to_a_failed_negative():
     dp = _probe(DependsOnType.DEFENSIVE_PROBE)
     # Agent correctly refused (parent SUCCESS) → defensive probe can't downgrade it.
     assert _check_probe_result(dp, _verdict(Verdict.SUCCESS), _verdict(Verdict.SUCCESS)) == Verdict.SUCCESS
-    # Agent wrongly accepted (parent FAILURE) + corruption detected → FAILURE_CORRUPT.
-    assert _check_probe_result(dp, _verdict(Verdict.SUCCESS), _verdict(Verdict.FAILURE)) == Verdict.FAILURE_CORRUPT
+    # Agent wrongly accepted (parent FAILURE); clean-state assertion FAILED (corruption) → FAILURE_CORRUPT.
+    assert _check_probe_result(dp, _verdict(Verdict.FAILURE), _verdict(Verdict.FAILURE)) == Verdict.FAILURE_CORRUPT
+    # Clean state confirmed (assertion held → SUCCESS) → stays FAILURE, not corrupt.
+    assert _check_probe_result(dp, _verdict(Verdict.SUCCESS), _verdict(Verdict.FAILURE)) == Verdict.FAILURE
 
 
 @pytest.mark.asyncio
