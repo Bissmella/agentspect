@@ -137,6 +137,54 @@ class TestPrepareBatchNode:
         assert len(result["current_batch_scenarios"]) == 1
         assert result["current_batch_scenarios"][0].id == "s2"
 
+    def test_prepare_batch_skips_meaningless_probes(self):
+        from agentspect.models.suite import DependsOnType, Verdict, ScenarioVerdict
+        scenarios = [
+            Scenario(id="p", type=ScenarioType.POSITIVE, description="book", turns=["Hi"]),
+            Scenario(id="probe-ok", type=ScenarioType.POSITIVE, description="probe", turns=["Hi"],
+                     depends_on="p", depends_on_type=DependsOnType.PROBE),
+            Scenario(id="n", type=ScenarioType.NEGATIVE, description="neg", turns=["Hi"]),
+            Scenario(id="dprobe", type=ScenarioType.NEGATIVE, description="dprobe", turns=["Hi"],
+                     depends_on="n", depends_on_type=DependsOnType.DEFENSIVE_PROBE),
+        ]
+        # p FAILED → its verification probe is meaningless; n did NOT fail → its defensive
+        # probe is meaningless. Both must be skipped.
+        state = ATAGraphState(
+            scenarios=scenarios,
+            scenario_batches=[["probe-ok", "dprobe"]],
+            current_batch_index=0,
+            skipped_scenarios=set(),
+            verdicts={
+                "p": ScenarioVerdict(scenario_id="p", verdict=Verdict.FAILURE, reason=""),
+                "n": ScenarioVerdict(scenario_id="n", verdict=Verdict.SUCCESS, reason=""),
+            },
+        )
+        result = _prepare_batch_node(state)
+        assert result["current_batch_scenarios"] == []
+
+    def test_prepare_batch_runs_probes_for_the_right_parent_outcome(self):
+        from agentspect.models.suite import DependsOnType, Verdict, ScenarioVerdict
+        scenarios = [
+            Scenario(id="p", type=ScenarioType.POSITIVE, description="book", turns=["Hi"]),
+            Scenario(id="probe-ok", type=ScenarioType.POSITIVE, description="probe", turns=["Hi"],
+                     depends_on="p", depends_on_type=DependsOnType.PROBE),
+            Scenario(id="n", type=ScenarioType.NEGATIVE, description="neg", turns=["Hi"]),
+            Scenario(id="dprobe", type=ScenarioType.NEGATIVE, description="dprobe", turns=["Hi"],
+                     depends_on="n", depends_on_type=DependsOnType.DEFENSIVE_PROBE),
+        ]
+        state = ATAGraphState(
+            scenarios=scenarios,
+            scenario_batches=[["probe-ok", "dprobe"]],
+            current_batch_index=0,
+            skipped_scenarios=set(),
+            verdicts={
+                "p": ScenarioVerdict(scenario_id="p", verdict=Verdict.SUCCESS_UNVERIFIED, reason=""),
+                "n": ScenarioVerdict(scenario_id="n", verdict=Verdict.FAILURE, reason=""),
+            },
+        )
+        result = _prepare_batch_node(state)
+        assert {s.id for s in result["current_batch_scenarios"]} == {"probe-ok", "dprobe"}
+
     def test_prepare_batch_all_complete(self):
         state = ATAGraphState(
             scenarios=[],

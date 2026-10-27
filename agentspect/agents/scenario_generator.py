@@ -169,6 +169,10 @@ IMPORTANT: Probes are ADDITIONAL scenarios that verify state changes. They do NO
    - BAD: "Hi, my phone number is 123-456-7890" (made up)
 4. Keep turns concise - 1-3 sentences each
 5. Typical flow: greeting → provide identity → state request → confirm details
+6. The turns MUST carry out the action named in the description. A negative scenario's
+   turns must actually ATTEMPT the invalid thing (ask for the out-of-catalog slot, use the
+   unknown phone, cross the stated constraint) — never substitute a valid value.
+7. Every scenario MUST have at least one assertion — a scenario with none cannot be evaluated.
 
 ## Assertion Writing Rules
 

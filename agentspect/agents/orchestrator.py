@@ -13,7 +13,7 @@ from agentspect.agents.state import ATAGraphState
 from agentspect.agents.user_simulator import user_simulator_node
 from agentspect.agents.world_state_patcher import world_state_patcher_node
 from agentspect.llm.client import LLMClient, create_llm_client
-from agentspect.models.suite import Scenario
+from agentspect.models.suite import DependsOnType, Scenario, Verdict
 from agentspect.models.world_state import WorldState
 from agentspect.models.yaml_input import YAMLInput
 from agentspect.services.dag import topological_batches
@@ -110,11 +110,22 @@ def _prepare_batch_node(state: ATAGraphState) -> dict[str, Any]:
 
     batch_ids = batches[current_index]
     scenarios_map = {s.id: s for s in all_scenarios}
+    verdicts = state.get("verdicts", {})
 
     batch_scenarios = []
     for sid in batch_ids:
-        if sid not in skipped and sid in scenarios_map:
-            batch_scenarios.append(scenarios_map[sid])
+        if sid in skipped or sid not in scenarios_map:
+            continue
+        sc = scenarios_map[sid]
+        # A probe is only worth running for the parent outcome it exists to verify.
+        if sc.depends_on and sc.depends_on_type:
+            pv = verdicts.get(sc.depends_on)
+            pv = pv.verdict if pv else None
+            if sc.depends_on_type == DependsOnType.PROBE and pv != Verdict.SUCCESS_UNVERIFIED:
+                continue
+            if sc.depends_on_type == DependsOnType.DEFENSIVE_PROBE and pv != Verdict.FAILURE:
+                continue
+        batch_scenarios.append(sc)
 
     return {
         "current_batch_scenarios": batch_scenarios,
