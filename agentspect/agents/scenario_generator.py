@@ -263,6 +263,13 @@ async def scenario_generator_node(
                     scenarios.append(sc)
                     seen.add(sc.id)
 
+        # Merge deterministic knowledge_base scenarios (from asset ingestion). They are
+        # additive like probes — never counted toward the positive/negative targets.
+        kb_scenarios = state.get("kb_scenarios", [])
+        if kb_scenarios:
+            seen_ids = {s.id for s in scenarios}
+            scenarios.extend(s for s in kb_scenarios if s.id not in seen_ids)
+
         # Placeholder validity is a correctness gate, not a count one — still hard-fail.
         world_state_data = state["world_state_input"].model_dump()
         for scenario in scenarios:
@@ -281,8 +288,9 @@ async def scenario_generator_node(
                 "status": "failed",
             }
 
-        pos = sum(1 for s in scenarios if s.type == ScenarioType.POSITIVE)
-        neg = sum(1 for s in scenarios if s.type == ScenarioType.NEGATIVE)
+        # Count only generated scenarios against the targets — KB scenarios are extra.
+        pos = sum(1 for s in scenarios if s.type == ScenarioType.POSITIVE and s.knowledge_base is None)
+        neg = sum(1 for s in scenarios if s.type == ScenarioType.NEGATIVE and s.knowledge_base is None)
         warning = None
         if pos < want_pos or neg < want_neg:
             warning = (

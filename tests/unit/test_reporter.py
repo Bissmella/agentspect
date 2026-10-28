@@ -440,3 +440,48 @@ async def test_reporter_agent_class(
 
     assert result["status"] == "completed"
     assert "report" in result
+
+
+# ── Knowledge base section ──────────────────────────────────────────────────
+
+from agentspect.agents.reporter import _build_knowledge_base_section
+from agentspect.assets.base import Asset
+from agentspect.models.suite import TranscriptAssertion
+
+
+def _kb_scenario(i, q, a):
+    return Scenario(
+        id=f"kb-src-{i}",
+        type=ScenarioType.POSITIVE,
+        description=f"Knowledge base: {q}",
+        turns=[q],
+        assertions=[TranscriptAssertion(description="kb", check=a, speaker="agent")],
+        knowledge_base={"question": q, "answer": a},
+    )
+
+
+def test_knowledge_base_section_aggregates_coverage_and_accuracy():
+    scenarios = [_kb_scenario(i, f"Q{i}", f"A{i}") for i in range(4)]
+    # also a non-KB scenario — must be ignored by the KB section
+    scenarios.append(Scenario(id="pos", type=ScenarioType.POSITIVE, description="x", turns=["x"]))
+    verdicts = {
+        "kb-src-0": ScenarioVerdict(scenario_id="kb-src-0", verdict=Verdict.SUCCESS_UNVERIFIED, reason=""),
+        "kb-src-1": ScenarioVerdict(scenario_id="kb-src-1", verdict=Verdict.SUCCESS, reason=""),
+        "kb-src-2": ScenarioVerdict(scenario_id="kb-src-2", verdict=Verdict.FAILURE, reason=""),  # wrong
+        "kb-src-3": ScenarioVerdict(scenario_id="kb-src-3", verdict=Verdict.ERROR, reason=""),    # eval error
+    }
+    assets = [Asset(id="kb", format="csv", role="knowledge_base", total_rows=100,
+                    description="Customer support KB")]
+
+    section = _build_knowledge_base_section(scenarios, verdicts, assets)
+    assert section["name"] == "Customer support KB"
+    assert section["coverage"] == {"tested": 4, "total": 100}  # 4 sampled of 100 eligible
+    assert section["correct"] == 2  # SUCCESS + SUCCESS_UNVERIFIED
+    assert section["errors"] == 1
+    assert len(section["questions"]) == 4
+    assert section["questions"][0]["reference_answer"] == "A0"
+
+
+def test_knowledge_base_section_absent_without_kb():
+    scenarios = [Scenario(id="pos", type=ScenarioType.POSITIVE, description="x", turns=["x"])]
+    assert _build_knowledge_base_section(scenarios, {}, []) is None

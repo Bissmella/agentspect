@@ -7,7 +7,9 @@ world_state:
 
 - ``entities``     — an LLM maps sample rows into world_state entities.
 - ``data_sample``  — the sampled rows are placed as-is (deterministic).
-- ``knowledge_base`` — reserved for RAG; raises a clear NotImplementedError.
+- ``knowledge_base`` — each sampled Q&A pair becomes one positive test scenario
+  ("ask the question → the agent's answer must match the reference"), built
+  deterministically here and merged into the frozen scenario set by the generator.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from pydantic import BaseModel, Field
 from agentspect.agents.state import ATAGraphState
 from agentspect.assets.base import Asset
 from agentspect.llm.client import LLMClient
+from agentspect.models.suite import Scenario, ScenarioType, TranscriptAssertion
 from agentspect.models.world_state import WorldState
 
 
@@ -43,6 +46,60 @@ def _place_at_pointer(data: dict[str, Any], pointer: str, value: list) -> None:
         existing.extend(value)
     else:
         cur[last] = value
+
+
+# Column-name hints for picking the question / answer field out of a KB CSV.
+_QUESTION_KEYS = ("question", "q", "prompt", "query", "input", "utterance")
+_ANSWER_KEYS = ("answer", "a", "response", "reply", "output", "completion", "expected")
+
+
+def _kb_columns(rows: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """Pick the (question, answer) columns: match header names, else first two columns."""
+    if not rows:
+        return None, None
+    keys = list(rows[0].keys())
+    lower = {k.lower(): k for k in keys}
+    q = next((lower[k] for k in _QUESTION_KEYS if k in lower), None)
+    a = next((lower[k] for k in _ANSWER_KEYS if k in lower), None)
+    if q is None or a is None:
+        cols = [k for k in keys if k != "id"] or keys  # ignore synthetic id column
+        q = q or (cols[0] if cols else None)
+        a = a or next((c for c in cols if c != q), None)
+    return q, a
+
+
+def _build_kb_scenarios(asset: Asset) -> list[Scenario]:
+    """One positive scenario per sampled Q&A pair — ask the question, check the answer."""
+    q_key, a_key = _kb_columns(asset.rows)
+    if not q_key or not a_key:
+        return []
+    scenarios: list[Scenario] = []
+    for i, row in enumerate(asset.rows):
+        question = str(row.get(q_key, "")).strip()
+        answer = str(row.get(a_key, "")).strip()
+        if not question or not answer:
+            continue
+        scenarios.append(
+            Scenario(
+                id=f"kb-{asset.id}-{i}",
+                type=ScenarioType.POSITIVE,
+                description=f"Knowledge base: {question}",
+                turns=[question],
+                assertions=[
+                    TranscriptAssertion(
+                        description="Agent answers correctly from the knowledge base",
+                        check=(
+                            "The agent's reply correctly and completely answers the question, "
+                            f'consistent with this reference answer: "{answer}". Minor wording '
+                            "differences are fine; a wrong, missing, or contradictory answer is not."
+                        ),
+                        speaker="agent",
+                    )
+                ],
+                knowledge_base={"question": question, "answer": answer},
+            )
+        )
+    return scenarios
 
 
 def _ensure_ids(rows: list[dict[str, Any]], asset_id: str) -> list[dict[str, Any]]:
@@ -110,6 +167,7 @@ async def asset_ingestion_node(
         return {"status": "no_assets"}
 
     data = world_state.data
+    kb_scenarios: list[Scenario] = []
 
     for asset in assets:
         if asset.role == "entities":
@@ -122,11 +180,15 @@ async def asset_ingestion_node(
             _place_at_pointer(data, target, asset.rows)
 
         elif asset.role == "knowledge_base":
-            raise NotImplementedError(
-                f"Asset '{asset.id}': role 'knowledge_base' (RAG) is not implemented yet"
-            )
+            # Q&A pairs become their own test scenarios; they do NOT go into
+            # world_state (the agent answers from its own KB — ATA is black-box).
+            kb_scenarios.extend(_build_kb_scenarios(asset))
 
-    return {"world_state": world_state, "status": "assets_ingested"}
+    return {
+        "world_state": world_state,
+        "kb_scenarios": kb_scenarios,
+        "status": "assets_ingested",
+    }
 
 
 class AssetIngestionAgent:

@@ -16,6 +16,7 @@ class ATAGraphState(TypedDict, total=False):
     assets: list[Asset]
 
     world_state: WorldState
+    kb_scenarios: list[Scenario]  # deterministic Q&A scenarios from knowledge_base assets
     scenarios: list[Scenario]
     scenario_batches: list[list[str]]
 

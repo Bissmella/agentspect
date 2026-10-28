@@ -176,11 +176,35 @@ class TestAssetIngestionAgent:
         await asset_ingestion_node(state, _MockLLM(entities=[{"id": "p1"}]))
         assert ws.data["catalog"]["people"] == [{"id": "p1"}]
 
-    async def test_knowledge_base_not_implemented(self):
-        asset = Asset(id="docs", format="jsonl", role="knowledge_base", rows=[{"t": "x"}], total_rows=1)
+    async def test_knowledge_base_builds_scenarios_without_touching_world_state(self):
+        rows = [
+            {"question": "What are your hours?", "answer": "9 to 5, Mon-Fri."},
+            {"question": "Do you ship abroad?", "answer": "Yes, worldwide."},
+        ]
+        asset = Asset(id="kb", format="csv", role="knowledge_base", rows=rows, total_rows=100)
+        state, ws = _state([asset])
+        result = await asset_ingestion_node(state, _MockLLM(raise_exc=True))  # no LLM needed
+        kb = result["kb_scenarios"]
+        assert len(kb) == 2
+        assert kb[0].turns == ["What are your hours?"]
+        assert kb[0].knowledge_base == {"question": "What are your hours?", "answer": "9 to 5, Mon-Fri."}
+        assert "9 to 5" in kb[0].assertions[0].check  # reference answer embedded in the check
+        assert ws.data["catalog"] == {}  # KB pairs never enter world_state
+
+    async def test_knowledge_base_falls_back_to_first_two_columns(self):
+        rows = [{"prod": "X100", "spec": "waterproof"}]  # no question/answer headers
+        asset = Asset(id="kb", format="csv", role="knowledge_base", rows=rows, total_rows=1)
         state, _ = _state([asset])
-        with pytest.raises(NotImplementedError, match="knowledge_base"):
-            await asset_ingestion_node(state, _MockLLM())
+        result = await asset_ingestion_node(state, _MockLLM())
+        kb = result["kb_scenarios"]
+        assert kb[0].knowledge_base == {"question": "X100", "answer": "waterproof"}
+
+    async def test_knowledge_base_skips_blank_pairs(self):
+        rows = [{"question": "Q1", "answer": ""}, {"question": "Q2", "answer": "A2"}]
+        asset = Asset(id="kb", format="csv", role="knowledge_base", rows=rows, total_rows=2)
+        state, _ = _state([asset])
+        result = await asset_ingestion_node(state, _MockLLM())
+        assert [s.knowledge_base["question"] for s in result["kb_scenarios"]] == ["Q2"]
 
     async def test_no_assets_is_noop(self):
         state, ws = _state([])

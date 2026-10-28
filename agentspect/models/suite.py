@@ -127,6 +127,9 @@ class Scenario(BaseModel):
     depends_on: str | None = None
     depends_on_type: DependsOnType | None = None
     target_constraint: str | None = None
+    # Set on scenarios built deterministically from a knowledge_base asset: the source
+    # Q&A pair ({"question", "answer"}), so the report can score coverage/accuracy per pair.
+    knowledge_base: dict[str, str] | None = None
     voice_actions: list[VoiceAction] = Field(default_factory=list)
 
     @model_validator(mode="after")

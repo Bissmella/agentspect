@@ -88,6 +88,47 @@ Analyze these failures and provide structured feedback."""
     ]
 
 
+# A KB answer that scored a success run is "correct"; no state to probe, so it rests
+# at SUCCESS_UNVERIFIED. FAILURE = wrong answer, ERROR = could not be evaluated.
+_KB_CORRECT = {Verdict.SUCCESS, Verdict.SUCCESS_UNVERIFIED}
+
+
+def _build_knowledge_base_section(scenarios, verdicts, assets) -> dict[str, Any] | None:
+    kb_scenarios = [s for s in scenarios if s.knowledge_base]
+    kb_assets = [a for a in assets if getattr(a, "role", None) == "knowledge_base"]
+    if not kb_scenarios and not kb_assets:
+        return None
+
+    tested = len(kb_scenarios)
+    # Eligible total = all pairs available to sample from; falls back to what was tested.
+    total_eligible = sum(a.total_rows for a in kb_assets) or tested
+
+    correct = errors = 0
+    questions = []
+    for s in kb_scenarios:
+        v = verdicts.get(s.id)
+        vv = v.verdict if v else None
+        if vv in _KB_CORRECT:
+            correct += 1
+        elif vv == Verdict.ERROR:
+            errors += 1
+        questions.append({
+            "id": s.id,
+            "question": s.knowledge_base.get("question"),
+            "reference_answer": s.knowledge_base.get("answer"),
+            "verdict": vv.value if vv else "pending",
+        })
+
+    name = next((a.description or a.id for a in kb_assets), "Knowledge base")
+    return {
+        "name": name,
+        "coverage": {"tested": tested, "total": total_eligible},
+        "correct": correct,
+        "errors": errors,
+        "questions": questions,
+    }
+
+
 async def reporter_node(
     state: ATAGraphState,
     llm_client: LLMClient,
@@ -98,6 +139,7 @@ async def reporter_node(
     world_state_snapshots = state.get("world_state_snapshots", {})
     patch_ops = state.get("patch_ops", {})
     agent_under_test = state.get("agent_under_test")
+    assets = state.get("assets", [])
 
     verdict_counts = Counter(v.verdict.value for v in verdicts.values())
 
@@ -137,6 +179,9 @@ async def reporter_node(
 
         if scenario.target_constraint:
             result["target_constraint"] = scenario.target_constraint
+
+        if scenario.knowledge_base:
+            result["knowledge_base"] = scenario.knowledge_base
 
         if scenario.depends_on:
             result["depends_on"] = scenario.depends_on
@@ -210,6 +255,10 @@ async def reporter_node(
         "world_state_audit": world_state_audit,
         "failure_analysis": failure_analysis,
     }
+
+    kb_section = _build_knowledge_base_section(scenarios, verdicts, assets)
+    if kb_section:
+        report["knowledge_base"] = kb_section
 
     return {
         "report": report,
