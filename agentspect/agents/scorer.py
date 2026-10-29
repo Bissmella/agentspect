@@ -242,6 +242,15 @@ async def _evaluate_behavioral_assertion(
 - If the agent asked for a detail and then completed the action, that's "confirmation".
 - Partial completion or errors are NOT confirmation.
 
+## Reason-specific refusals
+The Description may state WHY a refusal is expected (e.g. "refuses because the caller is unregistered").
+When it does, the refusal only counts if it is actually on THAT basis. A refusal that happens for an
+UNRELATED reason — most commonly the requested item being unavailable/already taken — does NOT satisfy
+a reason-specific refusal when the agent was otherwise willing to proceed on the tested condition (e.g.
+it was signing the caller up, or never blocked on the stated gate). In that case return satisfied=false
+and state the agent's ACTUAL reason. A refusal check whose Description names no specific reason is
+satisfied by any non-fulfillment, as above.
+
 Return a JSON with:
 - satisfied: true if the agent exhibited the expected behavior, false otherwise
 - reasoning: 1-2 sentences explaining what behavior was observed"""

@@ -155,6 +155,11 @@ IMPORTANT: Probes are ADDITIONAL scenarios that verify state changes. They do NO
 - For every negative scenario, set `target_constraint` to describe what boundary is being tested:
   - If violating a specific constraint from the list above, use the EXACT text of that constraint
   - If adversarial in a broader sense, use a short descriptive label like "out-of-scope request" or "prompt injection attempt"
+- DIVERSITY: each negative scenario must test a DISTINCT boundary — a unique `target_constraint`.
+  Do NOT produce several rewordings of the same constraint (e.g. three variations of "unregistered
+  user books"). If there are fewer distinct boundaries than the requested negative count, generate
+  only as many as there are distinct boundaries — a smaller, diverse set is far more useful than
+  padding with duplicates.
 - If the negative scenario could corrupt state, add a DEFENSIVE_PROBE:
   - Set depends_on_type to "defensive_probe"
   - Verifies state wasn't corrupted by the invalid request
