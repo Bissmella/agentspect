@@ -59,10 +59,17 @@ def _kb_columns(rows: list[dict[str, Any]]) -> tuple[str | None, str | None]:
         return None, None
     keys = list(rows[0].keys())
     lower = {k.lower(): k for k in keys}
-    q = next((lower[k] for k in _QUESTION_KEYS if k in lower), None)
-    a = next((lower[k] for k in _ANSWER_KEYS if k in lower), None)
+    # Exact header match first, then a substring match so "expected_answer", "answer_text"
+    # etc. still resolve — the old exact-only match fell through and picked the id column.
+    q = next((lower[k] for k in _QUESTION_KEYS if k in lower), None) or next(
+        (orig for low, orig in lower.items() if "question" in low), None
+    )
+    a = next((lower[k] for k in _ANSWER_KEYS if k in lower), None) or next(
+        (orig for low, orig in lower.items() if "answer" in low), None
+    )
     if q is None or a is None:
-        cols = [k for k in keys if k != "id"] or keys  # ignore synthetic id column
+        # Fallback to positional, skipping id-like columns (id, pair_id, *_id).
+        cols = [k for k in keys if k.lower() != "id" and not k.lower().endswith("_id")] or keys
         q = q or (cols[0] if cols else None)
         a = a or next((c for c in cols if c != q), None)
     return q, a
