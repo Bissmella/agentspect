@@ -79,23 +79,21 @@ class VoiceIO:
         )
 
     async def synthesize_stream(self, tokens: AsyncIterator[str]) -> AsyncIterator[bytes]:
-        """Stream TTS by natural phrase, flushing on sentence boundaries.
+        """Batch-backed default: accumulate the whole reply and synthesize it in ONE call.
 
-        ``tokens`` is an async iterator of text chunks (LLM tokens).
-        A real streaming TTS (Pipecat) replaces this body without touching callers.
+        This default is only ever used by batch (REST) providers — a real streaming TTS
+        (Pipecat) overrides the method. The old per-sentence flush turned one reply into
+        several HTTP calls (a new connection each) and hammered batch providers'
+        concurrency caps, with no real benefit: incremental first-audio only helps a true
+        streaming TTS. ``tokens`` is still fully consumed, so callers that tee it (to record
+        what was said) are unaffected.
         """
         buffer = ""
         async for token in tokens:
             buffer += token
-            trimmed = buffer.strip()
-            ends_sentence = trimmed.endswith((".", "!", "?"))
-            # Flush a very long clause at a word boundary so we don't hold the whole turn.
-            long_run_on = len(buffer) >= 200 and token[-1:].isspace()
-            if trimmed and (ends_sentence or long_run_on):
-                yield await self.synthesize(trimmed)
-                buffer = ""
-        if buffer.strip():
-            yield await self.synthesize(buffer.strip())
+        text = buffer.strip()
+        if text:
+            yield await self.synthesize(text)
 
     async def transcribe_stream(
         self, audio_chunks: AsyncIterator[bytes]
