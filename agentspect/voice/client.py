@@ -12,6 +12,8 @@ accent defaults, recording which were used so the adapter can stamp ``VoiceMeta`
 
 from __future__ import annotations
 
+import io
+import wave
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
@@ -53,11 +55,31 @@ class BatchSTTClient(STTClient):
     async def transcribe_stream(
         self, audio_chunks: AsyncIterator[bytes], *, language: str | None = None
     ) -> AsyncIterator[TranscriptionResult]:
-        buffer = bytearray()
+        # Frames arrive as standalone WAV containers (the adapter streams one per chunk).
+        # A naive byte-concat would glue WAV headers mid-stream and corrupt the audio, so
+        # decode each to PCM and re-wrap once; non-WAV frames raw-concat as a fallback.
+        pcm = bytearray()
+        params: tuple[int, int, int] | None = None
         async for chunk in audio_chunks:
-            buffer.extend(chunk)
-        if buffer:
-            yield await self.transcribe(bytes(buffer), language=language)
+            try:
+                with wave.open(io.BytesIO(chunk), "rb") as w:
+                    params = params or (w.getnchannels(), w.getsampwidth(), w.getframerate())
+                    pcm += w.readframes(w.getnframes())
+            except (wave.Error, EOFError):
+                pcm += chunk
+        if not pcm:
+            return
+        if params is None:
+            audio = bytes(pcm)
+        else:
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(params[0])
+                w.setsampwidth(params[1])
+                w.setframerate(params[2])
+                w.writeframes(bytes(pcm))
+            audio = buf.getvalue()
+        yield await self.transcribe(audio, language=language)
 
 
 class TTSClient(ABC):
@@ -73,6 +95,22 @@ class TTSClient(ABC):
         accent: str | None = None,
     ) -> bytes:
         ...
+
+    async def synthesize_stream(
+        self,
+        text: str,
+        *,
+        voice: str | None = None,
+        language: str | None = None,
+        accent: str | None = None,
+    ) -> AsyncIterator[bytes]:
+        """Yield audio frames as they are produced. Batch default: one blob.
+
+        A provider whose API streams the audio (first bytes long before the last)
+        overrides this to forward chunks as they arrive — the downstream STT then
+        transcribes in realtime instead of waiting for the whole clip.
+        """
+        yield await self.synthesize(text, voice=voice, language=language, accent=accent)
 
 
 class VoiceIODefaults(BaseModel):
@@ -121,21 +159,22 @@ class VoiceIO:
         )
 
     async def synthesize_stream(self, tokens: AsyncIterator[str]) -> AsyncIterator[bytes]:
-        """Batch-backed default: accumulate the whole reply and synthesize it in ONE call.
+        """Accumulate the reply text, then stream audio frames from the TTS as produced.
 
-        This default is only ever used by batch (REST) providers — a real streaming TTS
-        (Pipecat) overrides the method. The old per-sentence flush turned one reply into
-        several HTTP calls (a new connection each) and hammered batch providers'
-        concurrency caps, with no real benefit: incremental first-audio only helps a true
-        streaming TTS. ``tokens`` is still fully consumed, so callers that tee it (to record
-        what was said) are unaffected.
+        A streaming TTS yields many frames (first audio fast); a batch one yields a single
+        blob. ``tokens`` is fully consumed, so callers that tee it (to record what was
+        said) are unaffected.
         """
         buffer = ""
         async for token in tokens:
             buffer += token
         text = buffer.strip()
-        if text:
-            yield await self.synthesize(text)
+        if not text:
+            return
+        async for frame in self.tts.synthesize_stream(
+            text, voice=self.defaults.voice, language=self.defaults.language, accent=self.defaults.accent
+        ):
+            yield frame
 
     async def transcribe_stream(
         self, audio_chunks: AsyncIterator[bytes]

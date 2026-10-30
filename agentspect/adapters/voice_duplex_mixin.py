@@ -19,9 +19,10 @@ real call uses, where **silence** drives the turn-taking and nobody announces en
 Inbound receive + STT run concurrently with SPEAKING so the agent may begin replying
 before ATA finishes; Stage 1 consumes the result after speaking (barge-in is deferred).
 VAD is optional (``agentspect[pipecat]``): it endpoints a continuous PCM stream, while WS
-WAV frames (a header per frame) use the inter-frame silence gap instead. Raw-PCM frames
-(``{"format": "pcm"}``) are wrapped once into a WAV for the batch STT. Content TTS/STT is
-batch under the hood (``VoiceIO``); real streaming drops in behind the same interface.
+WAV frames (a header per frame) use the inter-frame silence gap instead. Each WAV frame is
+streamed to the STT as it arrives, so transcription overlaps the agent still speaking; the
+TTS likewise yields frames as produced. A raw-PCM (telephony) stream is still transcribed
+as one blob at end-of-turn. Batch providers yield a single blob behind the same interface.
 """
 
 from __future__ import annotations
@@ -240,7 +241,7 @@ class VoiceDuplexMixin:
             else:
                 wav = self._join_wav_frames(chunks)
             if audio_q is not None:
-                if wav:
+                if is_pcm and wav:  # PCM wasn't streamed per-frame → hand the STT the blob
                     audio_q.put_nowait(wav)
                 audio_q.put_nowait(None)
             # Talk time is the captured audio's own duration, not the frame-arrival span
@@ -264,6 +265,11 @@ class VoiceDuplexMixin:
                 gap_ms = int((now - last_t) * 1000)
                 if gap_ms >= self.dead_air_gap_ms:
                     gaps.append(gap_ms)
+
+        def feed_stt(chunk: bytes) -> None:
+            # Stream each WAV frame to the STT as it arrives
+            if audio_q is not None and not is_pcm:
+                audio_q.put_nowait(chunk)
 
         while True:
             if state is CallState.AWAITING:
@@ -305,11 +311,13 @@ class VoiceDuplexMixin:
                 elif quiet:
                     last_t = now
                     chunks.append(chunk)
+                    feed_stt(chunk)
                     return finish()  # speech → quiet edge: turn over
                 else:
                     note_gap(now)
                 last_t = now
                 chunks.append(chunk)
+                feed_stt(chunk)
                 continue
 
             # WS / WAV frames (no VAD): a frame arrives only when the agent speaks, so the
@@ -319,7 +327,8 @@ class VoiceDuplexMixin:
             else:
                 note_gap(now)
             last_t = now
-            chunks.append(chunk)  # STT audio is assembled once in finish(), not per frame
+            chunks.append(chunk)  # kept for the inlined report audio; STT gets it live below
+            feed_stt(chunk)
 
     def _pcm_to_wav(self, pcm: bytes) -> bytes:
         """Wrap raw PCM16 mono @ sample_rate into a WAV container for the batch STT."""
