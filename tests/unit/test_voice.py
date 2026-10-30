@@ -20,6 +20,7 @@ from agentspect.models.suite import Scenario, ScenarioType
 from agentspect.models.transcript import AgentFailure, Transcript, Turn, VoiceMeta
 from agentspect.models.yaml_input import STTSpec, TTSSpec, VoiceConfig
 from agentspect.voice.client import (
+    BatchSTTClient,
     STTClient,
     TranscriptionResult,
     TTSClient,
@@ -30,7 +31,7 @@ from agentspect.voice.registry import create_voice_io, register_stt, register_tt
 
 # ── Fakes ─────────────────────────────────────────────────────────────────────
 
-class FakeSTT(STTClient):
+class FakeSTT(BatchSTTClient):
     def __init__(self, model=None, api_key=None):
         self.model = model
 
@@ -156,9 +157,9 @@ async def test_voice_io_synthesize_and_transcribe_roundtrip():
     assert result.text == "book me a slot"
 
 
-async def test_synthesize_stream_segments_by_sentence_not_word():
-    # Phrases, not one clip per word — so the downstream STT gets natural boundaries
-    # instead of "Could youpleaseprovide".
+async def test_synthesize_stream_batches_whole_reply_in_one_call():
+    # Batch providers synthesize the whole reply in ONE call — per-sentence flushing
+    # only multiplied HTTP calls (one connection each) with no benefit for batch TTS.
     vio = _fake_voice_io()  # FakeTTS returns the text bytes, so chunks decode to what was synth'd
 
     async def toks():
@@ -166,7 +167,7 @@ async def test_synthesize_stream_segments_by_sentence_not_word():
             yield t
 
     chunks = [c.decode() async for c in vio.synthesize_stream(toks())]
-    assert chunks == ["Hi there.", "Please book slot A?"]
+    assert chunks == ["Hi there. Please book slot A?"]
 
 
 # ── Adapter ─────────────────────────────────────────────────────────────────────
@@ -712,7 +713,7 @@ async def test_raw_pcm_frames_are_wrapped_to_wav_for_stt():
 
     from agentspect.voice.vad import VadState
 
-    class CapturingSTT(STTClient):
+    class CapturingSTT(BatchSTTClient):
         def __init__(self, model=None, api_key=None):
             self.last_audio: bytes | None = None
 
@@ -761,7 +762,7 @@ async def test_multi_wav_frames_are_rejoined_into_one_valid_wav_for_stt():
             w.writeframes(b"".join(struct.pack("<h", 1000) for _ in range(nframes)))
         return json.dumps({"type": "audio", "data": base64.b64encode(buf.getvalue()).decode(), "format": "wav"})
 
-    class CapturingSTT(STTClient):
+    class CapturingSTT(BatchSTTClient):
         def __init__(self, model=None, api_key=None):
             self.last_audio: bytes | None = None
 
@@ -1046,6 +1047,30 @@ async def test_transcribe_stream_default_is_batch_backed():
     results = [r async for r in vio.transcribe_stream(chunks())]
     assert len(results) == 1  # batch-backed default: one final result
     assert results[0].text == "book me a slot"
+
+
+async def test_transcribe_stream_uses_provider_streaming_override():
+    # A provider that implements its own streaming ASR (e.g. Gradium's WS) owns it in the
+    # connector; VoiceIO just delegates, so the adapter stays provider-agnostic.
+    from agentspect.voice.client import STTClient, TranscriptionResult
+
+    class _StreamingSTT(STTClient):
+        async def transcribe(self, audio, *, language=None):  # batch path unused here
+            raise AssertionError("streaming provider should not fall back to batch")
+
+        async def transcribe_stream(self, audio_chunks, *, language=None):
+            async for _ in audio_chunks:
+                pass
+            yield TranscriptionResult(text="streamed", confidence=0.8, language=language)
+
+    vio = VoiceIO(_StreamingSTT(), FakeTTS(), VoiceIODefaults(language="en"))
+
+    async def chunks():
+        yield b"audio"
+
+    results = [r async for r in vio.transcribe_stream(chunks())]
+    assert [r.text for r in results] == ["streamed"]
+    assert results[0].language == "en"  # VoiceIO passes its default language through
 
 
 async def test_adapter_builds_response_from_streaming_stt_partials():

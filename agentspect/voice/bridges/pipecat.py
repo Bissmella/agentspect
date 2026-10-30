@@ -10,7 +10,7 @@ This is an OPTIONAL extra — Pipecat is not a core dependency.
 
 from __future__ import annotations
 
-from agentspect.voice.client import STTClient, TranscriptionResult, TTSClient
+from agentspect.voice.client import BatchSTTClient, TranscriptionResult, TTSClient
 
 _INSTALL_HINT = (
     "The Pipecat bridge requires the optional extra. Install it with:\n"
@@ -25,7 +25,7 @@ def _require_pipecat():
         raise ImportError(_INSTALL_HINT) from e
 
 
-class PipecatSTT(STTClient):
+class PipecatSTT(BatchSTTClient):
     """Adapt a Pipecat STT service to ATA's batch ``STTClient``.
 
     ``service`` is a constructed Pipecat STT service instance.

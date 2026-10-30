@@ -25,11 +25,39 @@ class TranscriptionResult(BaseModel):
 
 
 class STTClient(ABC):
-    """Speech-to-text. Implementations transcribe raw audio bytes."""
+    """Speech-to-text. Implementations transcribe raw audio bytes.
+
+    Both methods are abstract: a provider states explicitly how it streams. One with no
+    streaming ASR extends ``BatchSTTClient`` to opt into the buffer-once fallback.
+    """
 
     @abstractmethod
     async def transcribe(self, audio: bytes, *, language: str | None = None) -> TranscriptionResult:
         ...
+
+    @abstractmethod
+    def transcribe_stream(
+        self, audio_chunks: AsyncIterator[bytes], *, language: str | None = None
+    ) -> AsyncIterator[TranscriptionResult]:
+        """Yield final transcripts as audio streams in (immediate; no end-of-turn batch wait)."""
+        ...
+
+
+class BatchSTTClient(STTClient):
+    """STT base for providers with no streaming ASR (e.g. OpenAI Whisper).
+
+    The only option there is to accumulate the audio and transcribe once — so the
+    batch lives here, opt-in, not as a default on every STT.
+    """
+
+    async def transcribe_stream(
+        self, audio_chunks: AsyncIterator[bytes], *, language: str | None = None
+    ) -> AsyncIterator[TranscriptionResult]:
+        buffer = bytearray()
+        async for chunk in audio_chunks:
+            buffer.extend(chunk)
+        if buffer:
+            yield await self.transcribe(bytes(buffer), language=language)
 
 
 class TTSClient(ABC):
@@ -68,7 +96,21 @@ class VoiceIO:
         self.defaults = defaults or VoiceIODefaults()
 
     async def transcribe(self, audio: bytes) -> TranscriptionResult:
-        return await self.stt.transcribe(audio, language=self.defaults.language)
+        """Transcribe one audio blob through the provider's STREAMING path.
+        """
+        async def _one() -> AsyncIterator[bytes]:
+            yield audio
+
+        texts: list[str] = []
+        confidence: float | None = None
+        language: str | None = None
+        async for r in self.stt.transcribe_stream(_one(), language=self.defaults.language):
+            if r.text:
+                texts.append(r.text)
+            if r.confidence is not None:
+                confidence = r.confidence
+            language = r.language or language
+        return TranscriptionResult(text=" ".join(texts).strip(), confidence=confidence, language=language)
 
     async def synthesize(self, text: str) -> bytes:
         return await self.tts.synthesize(
@@ -98,15 +140,12 @@ class VoiceIO:
     async def transcribe_stream(
         self, audio_chunks: AsyncIterator[bytes]
     ) -> AsyncIterator[TranscriptionResult]:
-        """Stream STT: transcribe inbound audio as it arrives, yielding final results.
+        """Delegate to the STT provider's own streaming path (it owns its ASR + VAD).
 
-        This batch-backed default accumulates the chunks and transcribes once (one
-        final result). A real streaming STT (Pipecat) overrides this to yield final
-        transcripts as they finalize, so the caller builds the agent's utterance
-        without waiting for the agent to finish speaking.
+        Providers without a streaming ASR inherit ``STTClient.transcribe_stream``'s
+        batch default, so this stays provider-agnostic either way.
         """
-        buffer = bytearray()
-        async for chunk in audio_chunks:
-            buffer.extend(chunk)
-        if buffer:
-            yield await self.transcribe(bytes(buffer))
+        async for result in self.stt.transcribe_stream(
+            audio_chunks, language=self.defaults.language
+        ):
+            yield result

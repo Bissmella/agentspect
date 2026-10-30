@@ -10,7 +10,7 @@ from __future__ import annotations
 import io
 
 from agentspect.config import settings
-from agentspect.voice.client import STTClient, TranscriptionResult, TTSClient
+from agentspect.voice.client import BatchSTTClient, TranscriptionResult, TTSClient
 from agentspect.voice.registry import register_stt, register_tts
 
 _DEFAULT_STT_MODEL = "whisper-1"
@@ -19,7 +19,7 @@ _DEFAULT_VOICE = "alloy"
 
 
 @register_stt("openai")
-class OpenAISTT(STTClient):
+class OpenAISTT(BatchSTTClient):
     def __init__(self, model: str | None = None, api_key: str | None = None):
         import openai
 
