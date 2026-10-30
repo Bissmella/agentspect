@@ -223,15 +223,24 @@ async def user_simulator_node(
     transcripts = dict(state.get("transcripts", {}))
     verdicts = dict(state.get("verdicts", {}))
 
+    # Some adapters cap how many scenarios may run at once (voice: a shared provider
+    # session cap). None = unlimited, preserving full batch parallelism for HTTP/WS.
+    limit = getattr(adapter, "max_concurrency", None)
+    sem = asyncio.Semaphore(limit) if isinstance(limit, int) and limit > 0 else None
+
+    async def _run(scenario):
+        if sem is None:
+            return await _run_single_scenario(scenario, world_state, adapter, llm_client)
+        async with sem:
+            return await _run_single_scenario(scenario, world_state, adapter, llm_client)
+
     tasks = []
     scenario_ids = []
 
     for scenario in batch_scenarios:
         if scenario.id in skipped:
             continue
-        tasks.append(
-            _run_single_scenario(scenario, world_state, adapter, llm_client)
-        )
+        tasks.append(_run(scenario))
         scenario_ids.append(scenario.id)
 
     if tasks:

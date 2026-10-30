@@ -33,8 +33,12 @@ class VoiceWebSocketAdapter(VoiceDuplexMixin, WebSocketConnectionMixin, Protocol
         silence_ms: int = 700,
         response_timeout: float = 15.0,
         vad: VadDetector | None = None,
+        max_concurrency: int = 1,
     ):
         super().__init__(url, timeout)
+        # Voice STT/TTS providers cap concurrent sessions account-wide (shared with the agent
+        # under test), so scenarios run ~sequentially; raise alongside a higher provider plan.
+        self.max_concurrency = max_concurrency
         self.voice_io = voice_io
         # Agents that don't greet shouldn't stall the whole timeout.
         self.greeting_timeout = greeting_timeout if greeting_timeout is not None else min(timeout, 5.0)
