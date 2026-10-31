@@ -416,8 +416,9 @@ def test_intelligibility_metric():
 
 
 async def test_scorer_agent_failure_forces_failure_despite_passing_assertions():
-    """A behavioral failure must NOT be scored ERROR, and must fail the run even
-    when the (mocked) assertion evaluator would say the check passed."""
+    """An agent behavioral failure (silence, hangup, unintelligible) is the agent's fault →
+    FAILURE, not ERROR (ERROR is reserved for OUR-side faults). It fails the run even when
+    the (mocked) assertion evaluator would say the check passed."""
     from unittest.mock import AsyncMock, MagicMock
 
     from agentspect.agents.scorer import AssertionResult, scorer_node
@@ -508,17 +509,35 @@ async def test_blank_on_final_turn_is_not_a_failure():
     assert verdict is None
 
 
-async def test_disconnect_on_final_turn_is_cleared():
+async def test_disconnect_after_engagement_is_cleared_on_final_turn():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from agentspect.agents.user_simulator import _run_single_scenario
+
+    scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["hi", "bye"])
+    # Agent answers turn 1, then hangs up after goodbye — a graceful end-of-call.
+    adapter = _ScriptedAdapter([("sure, how can I help?", None), ("", AgentFailure.DISCONNECTED)])
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(content="bye"))  # adapts the 2nd user turn
+
+    transcript, verdict = await _run_single_scenario(scenario, _mk_ws(), adapter, llm)
+
+    assert transcript.turns[-1].agent_failure is None  # gated away: agent had engaged
+    assert verdict is None
+
+
+async def test_disconnect_without_ever_engaging_is_not_cleared():
     from unittest.mock import MagicMock
 
     from agentspect.agents.user_simulator import _run_single_scenario
 
     scenario = Scenario(id="s1", type=ScenarioType.POSITIVE, description="d", turns=["bye"])
-    adapter = _ScriptedAdapter([("", AgentFailure.DISCONNECTED)])  # agent hangs up after goodbye
+    # Agent never said anything and dropped — the timeout/disconnect bug, NOT a graceful hangup.
+    adapter = _ScriptedAdapter([("", AgentFailure.DISCONNECTED)])
 
     transcript, verdict = await _run_single_scenario(scenario, _mk_ws(), adapter, MagicMock())
 
-    assert transcript.turns[0].agent_failure is None  # gated away on the final turn
+    assert transcript.turns[0].agent_failure == AgentFailure.DISCONNECTED  # kept → scorer makes it FAILURE
     assert verdict is None
 
 

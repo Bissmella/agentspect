@@ -159,9 +159,11 @@ async def test_reporter_generates_complete_report(
     report = result["report"]
 
     assert report["agent_name"] == "Test Agent"
-    assert report["total_scenarios"] == 3
+    # positive-2 is a PROBE — folded into its parent and shown under probe_chains, so the
+    # headline total and counts reflect the two primary scenarios only (not the probe).
+    assert report["total_scenarios"] == 2
     assert "verdict_counts" in report
-    assert report["verdict_counts"]["success"] == 3
+    assert report["verdict_counts"]["success"] == 2
 
 
 @pytest.mark.asyncio

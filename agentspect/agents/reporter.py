@@ -141,9 +141,15 @@ async def reporter_node(
     agent_under_test = state.get("agent_under_test")
     assets = state.get("assets", [])
 
-    verdict_counts = Counter(v.verdict.value for v in verdicts.values())
-
     scenarios_map = {s.id: s for s in scenarios}
+
+    # Probes (and defensive probes) verify a parent — their outcome is folded into the
+    # parent's verdict and shown under probe_chains.
+    primary_scenarios = [s for s in scenarios if s.depends_on_type is None]
+    verdict_counts = Counter(
+        verdicts[s.id].verdict.value for s in primary_scenarios if s.id in verdicts
+    )
+
     per_scenario_results = []
 
     for scenario in scenarios:
@@ -248,7 +254,7 @@ async def reporter_node(
         "agent_name": agent_under_test.name if agent_under_test else "Unknown",
         "agent_url": agent_under_test.url if agent_under_test else None,
         "verdict_counts": dict(verdict_counts),
-        "total_scenarios": len(scenarios),
+        "total_scenarios": len(primary_scenarios),
         "metrics": metrics,
         "scenarios": per_scenario_results,
         "probe_chains": probe_chains,

@@ -182,7 +182,10 @@ Return ONLY the message you want to send. No explanations or quotes.""",
             if turn.error is None and turn.agent_failure is None and blank and (is_voice or not is_last_turn):
                 turn.agent_failure = AgentFailure.NO_RESPONSE
 
-            if turn.agent_failure == AgentFailure.DISCONNECTED and is_last_turn:
+            # A hangup at the end of a real conversation is fine; a disconnect when the agent
+            # never once engaged (e.g. it timed out, then the socket closed) is not
+            agent_engaged = (not blank) or any(t.agent_response.strip() for t in transcript.turns)
+            if turn.agent_failure == AgentFailure.DISCONNECTED and is_last_turn and agent_engaged:
                 turn.agent_failure = None
 
             transcript.add_turn(turn)

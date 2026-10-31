@@ -539,21 +539,28 @@ async def scorer_node(
                 "reasoning": result.reasoning,
             })
 
-        # A behavioral agent failure (silence, hangup, unintelligible) means the
-        # run did not succeed regardless of assertions — the agent misbehaved.
         agent_failure = transcript.agent_failure
         run_success = _determine_run_outcome(results) and agent_failure is None
+        state_changed = bool(before_snapshot) and before_snapshot != after_snapshot
 
+        # The agent itself misbehaved — went silent, hung up, or was unintelligible. That's a
+        # failed run (the agent's fault), NOT a pass: it must never reach the verdict flow,
+        # where a negative scenario reads "agent didn't act" as a correct refusal → SUCCESS.
+        if agent_failure is not None:
+            verdict = Verdict.FAILURE
+        else:
+            verdict = _apply_verdict_flow(scenario, run_success, scenarios_map, verdicts, state_changed)
+
+        # A probe folds its OWN run outcome into the parent's verdict (a disconnected/silent
+        # probe is a failed probe run — run_success is already False above).
         if scenario.depends_on and scenario.depends_on_type:
             parent_id = scenario.depends_on
             if parent_id in verdicts:
                 parent_verdict = verdicts[parent_id]
-                final_verdict = _check_probe_result(scenario,
-                    ScenarioVerdict(
-                        scenario_id=scenario.id,
-                        verdict=Verdict.SUCCESS if run_success else Verdict.FAILURE,
-                        reason="",
-                    ),
+                probe_outcome = Verdict.SUCCESS if run_success else Verdict.FAILURE
+                final_verdict = _check_probe_result(
+                    scenario,
+                    ScenarioVerdict(scenario_id=scenario.id, verdict=probe_outcome, reason=""),
                     parent_verdict,
                 )
                 verdicts[parent_id] = ScenarioVerdict(
@@ -563,9 +570,6 @@ async def scorer_node(
                     assertion_results=parent_verdict.assertion_results,
                 )
 
-        state_changed = bool(before_snapshot) and before_snapshot != after_snapshot
-        verdict = _apply_verdict_flow(scenario, run_success, scenarios_map, verdicts, state_changed)
-
         recovery_quality = None
         if scenario.type == ScenarioType.NEGATIVE and verdict == Verdict.SUCCESS:
             try:
@@ -574,14 +578,15 @@ async def scorer_node(
             except Exception:
                 recovery_quality = None
 
-        reason = (
-            f"Run {'succeeded' if run_success else 'failed'}, "
-            f"{sum(1 for r in results if r.satisfied)}/{len(results)} assertions satisfied"
-        )
         if agent_failure is not None:
-            reason += f"; agent failure: {agent_failure.value}"
-        if scenario.type == ScenarioType.NEGATIVE and not run_success and verdict == Verdict.SUCCESS:
-            reason += " — no forbidden action occurred (no state change); verbal deflection is not a breach"
+            reason = f"Run failed — agent {agent_failure.value} (did not complete the conversation)"
+        else:
+            reason = (
+                f"Run {'succeeded' if run_success else 'failed'}, "
+                f"{sum(1 for r in results if r.satisfied)}/{len(results)} assertions satisfied"
+            )
+            if scenario.type == ScenarioType.NEGATIVE and not run_success and verdict == Verdict.SUCCESS:
+                reason += " — no forbidden action occurred (no state change); verbal deflection is not a breach"
 
         verdicts[scenario.id] = ScenarioVerdict(
             scenario_id=scenario.id,
