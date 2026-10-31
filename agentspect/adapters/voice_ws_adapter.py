@@ -67,6 +67,12 @@ class VoiceWebSocketAdapter(VoiceDuplexMixin, WebSocketConnectionMixin, Protocol
             # A missing/failed greeting is not an error; the turn loop proceeds.
             self._openings[session_id] = None
 
+        # Anchor the first turn's response-delay at the greeting's end, so the recording has a
+        # realistic beat between the agent's greeting and the tester's first reply.
+        if not hasattr(self, "_last_agent_end"):
+            self._last_agent_end = {}
+        self._last_agent_end[session_id] = time.perf_counter()
+
         return session_id
 
     def create_transcript(self, scenario_id: str, session_id: str, protocol: str) -> Transcript:
@@ -79,4 +85,5 @@ class VoiceWebSocketAdapter(VoiceDuplexMixin, WebSocketConnectionMixin, Protocol
 
     async def end_session(self, session_id: str) -> None:
         self._openings.pop(session_id, None)
+        getattr(self, "_last_agent_end", {}).pop(session_id, None)
         await super().end_session(session_id)

@@ -113,16 +113,25 @@ class VoiceDuplexMixin:
         events.extend(cap.events)
         text = "".join(said)
         latency_ms = self._ms(start)
+        # Agent responsiveness = gap from ATA finishing speaking to the agent starting.
+        response_ms = self._response_latency_ms(events, cap.ttfa_ms)
+        # The reverse dead air: how long after the agent fell silent (previous turn) we began
+        # this turn's speech — real tester think+synthesis time
+        ata_delay_ms = self._ata_response_delay_ms(session_id, start, events)
         ata_wav = self._frames_to_wav(out_frames)
         ata_b64 = base64.b64encode(ata_wav).decode("ascii") if ata_wav else None
         if not cap.audio:
             # Silence is only a failure in conversational context — see user_simulator.
             vm = self._voice_meta(cap)
+            vm.time_to_first_audio_ms = response_ms
+            vm.ata_response_delay_ms = ata_delay_ms
             vm.ata_audio_wav_b64 = ata_b64
             return Turn(user_message=text, agent_response="", latency_ms=latency_ms,
                         voice=vm, voice_events=events)
 
         vm = self._voice_meta(cap, confidence)
+        vm.time_to_first_audio_ms = response_ms
+        vm.ata_response_delay_ms = ata_delay_ms
         vm.ata_audio_wav_b64 = ata_b64
         return Turn(user_message=text, agent_response=agent_response, latency_ms=latency_ms,
                     voice=vm, voice_events=events)
@@ -156,6 +165,37 @@ class VoiceDuplexMixin:
     @staticmethod
     def _ms(start: float) -> int:
         return int((time.perf_counter() - start) * 1000)
+
+    @staticmethod
+    def _response_latency_ms(events: list[VoiceEvent], fallback: int | None) -> int | None:
+        """Agent responsiveness: ms from ATA's last speech-stop to the agent's speech-start.
+        Both edges share the turn clock, so this excludes our own speaking time. Falls back
+        to the turn-start ttfa when an edge is missing (e.g. a silent turn → None)."""
+        ata_stop = next((e.t_ms for e in reversed(events) if e.kind == VoiceEventKind.ATA_SPEECH_STOP), None)
+        agent_start = next((e.t_ms for e in events if e.kind == VoiceEventKind.AGENT_SPEECH_START), None)
+        if ata_stop is not None and agent_start is not None:
+            return max(agent_start - ata_stop, 0)
+        return fallback
+
+    def _ata_response_delay_ms(self, session_id: str, start: float, events: list[VoiceEvent]) -> int | None:
+        """agent speech-stop (previous turn) → our speech-start (this turn), in ms.
+
+        Tracks the agent's last speech-end per session across turns (perf_counter is monotonic
+        and process-wide, so values from different turns are comparable). Returns None until the
+        agent has spoken at least once. Records this turn's agent speech-end for the next turn.
+        """
+        last_end = getattr(self, "_last_agent_end", None)
+        if last_end is None:
+            last_end = self._last_agent_end = {}
+        ata_start = next((e.t_ms for e in events if e.kind == VoiceEventKind.ATA_SPEECH_START), None)
+        prev_end = last_end.get(session_id)
+        delay = None
+        if prev_end is not None and ata_start is not None:
+            delay = max(int((start - prev_end) * 1000) + ata_start, 0)
+        agent_stop = next((e.t_ms for e in reversed(events) if e.kind == VoiceEventKind.AGENT_SPEECH_STOP), None)
+        if agent_stop is not None:
+            last_end[session_id] = start + agent_stop / 1000.0
+        return delay
 
     @staticmethod
     def _as_token_stream(message: str | AsyncIterator[str]) -> AsyncIterator[str]:

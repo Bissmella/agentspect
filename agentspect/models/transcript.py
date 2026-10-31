@@ -27,7 +27,8 @@ class VoiceMeta(BaseModel):
     Used for voice-based metrics.
     """
 
-    time_to_first_audio_ms: int | None = None  # start of agent speech, not round-trip
+    time_to_first_audio_ms: int | None = None  # agent responsiveness: our speech-stop → agent speech-start
+    ata_response_delay_ms: int | None = None    # the reverse dead air: agent speech-stop → our speech-start
     agent_speech_ms: int | None = None
     user_speech_ms: int | None = None
     silence_gaps_ms: list[int] = Field(default_factory=list)

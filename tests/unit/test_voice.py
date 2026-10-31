@@ -312,6 +312,64 @@ def _mk_scenario(sid: str) -> Scenario:
     return Scenario(id=sid, type=ScenarioType.POSITIVE, description="d", turns=["hi"])
 
 
+def test_response_latency_excludes_ata_speaking_time():
+    from agentspect.adapters.voice_duplex_mixin import VoiceDuplexMixin
+    from agentspect.models.transcript import VoiceEvent, VoiceEventKind
+
+    def ev(t, kind):
+        return VoiceEvent(t_ms=t, kind=kind, party="x")
+
+    events = [
+        ev(0, VoiceEventKind.ATA_SPEECH_START),
+        ev(3000, VoiceEventKind.ATA_SPEECH_STOP),    # tester spoke for 3s
+        ev(3200, VoiceEventKind.AGENT_SPEECH_START),  # agent replied 200ms after we stopped
+    ]
+    # Not 3200 (turn-start ttfa) — only the 200ms the agent actually took to respond.
+    assert VoiceDuplexMixin._response_latency_ms(events, fallback=3200) == 200
+    # Agent started before we finished (barge-in / overlap) clamps to 0, never negative.
+    assert VoiceDuplexMixin._response_latency_ms(
+        [ev(100, VoiceEventKind.ATA_SPEECH_STOP), ev(40, VoiceEventKind.AGENT_SPEECH_START)], fallback=9
+    ) == 0
+    # Missing an edge (silent turn) → fallback.
+    assert VoiceDuplexMixin._response_latency_ms([], fallback=None) is None
+
+
+def test_ata_response_delay_tracks_across_turns():
+    from agentspect.adapters.voice_duplex_mixin import VoiceDuplexMixin
+    from agentspect.models.transcript import VoiceEvent, VoiceEventKind
+
+    def ev(t, kind):
+        return VoiceEvent(t_ms=t, kind=kind, party="x")
+
+    m = VoiceDuplexMixin()
+    # Turn 1 (starts at t=100.0s): no prior agent speech → delay None; agent stops at +1.0s.
+    d1 = m._ata_response_delay_ms("s", 100.0, [
+        ev(0, VoiceEventKind.ATA_SPEECH_START), ev(100, VoiceEventKind.ATA_SPEECH_STOP),
+        ev(300, VoiceEventKind.AGENT_SPEECH_START), ev(1000, VoiceEventKind.AGENT_SPEECH_STOP),
+    ])
+    assert d1 is None
+    # Turn 2 starts at t=102.0s, we begin speaking 500ms in. Agent stopped at 100.0+1.0=101.0s,
+    # so the tester's dead air = (102.0-101.0)s + 500ms = 1500ms.
+    d2 = m._ata_response_delay_ms("s", 102.0, [ev(500, VoiceEventKind.ATA_SPEECH_START)])
+    assert d2 == 1500
+
+
+def test_latency_metric_uses_ttfa_not_whole_turn_for_voice():
+    from agentspect.metrics.base import MetricContext
+    from agentspect.metrics.builtin import LatencyMetric
+
+    transcript = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
+    # Whole-turn latency_ms is huge (agent spoke 8s); its responsiveness (ttfa) is 400ms.
+    transcript.add_turn(Turn(user_message="a", agent_response="b", latency_ms=8000,
+                             voice=VoiceMeta(time_to_first_audio_ms=400)))
+    scenario = _mk_scenario("s1")
+    ctx = MetricContext(scenarios=[scenario], transcripts={"s1": transcript})
+    m = LatencyMetric()
+    for i, turn in enumerate(transcript.turns):
+        m.on_turn(ctx, scenario, turn, i)
+    assert m.compute(ctx).avg_ms == 400  # responsiveness, not the 8000ms whole turn
+
+
 def test_time_to_first_audio_metric():
     from agentspect.metrics.base import MetricContext
 

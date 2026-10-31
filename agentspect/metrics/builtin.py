@@ -111,7 +111,12 @@ class LatencyMetric(Metric):
         self._samples: list[int] = []
 
     def on_turn(self, ctx: MetricContext, scenario: Scenario, turn: Turn, index: int) -> None:
-        if turn.error is None:
+        if turn.error is not None:
+            return
+        if turn.voice is not None:
+            if turn.voice.time_to_first_audio_ms is not None:
+                self._samples.append(turn.voice.time_to_first_audio_ms)
+        else:
             self._samples.append(turn.latency_ms)
 
     def compute(self, ctx: MetricContext) -> LatencyResult:
