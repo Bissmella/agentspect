@@ -68,8 +68,9 @@ class RecoveryClassification(BaseModel):
 
 
 class SpeechReadability(BaseModel):
-    unreadable_turns: int
-    examples: list[str]  # the offending snippets, verbatim as transcribed
+    # 1-based indices of the genuinely unintelligible utterances. Indices (not a bare count)
+    # so the number is auditable — each counted turn maps to a specific utterance.
+    unreadable_indices: list[int]
 
 
 def _evaluate_world_state_assertion_deterministic(
@@ -385,25 +386,35 @@ async def _evaluate_speech_readability(
 
     numbered = "\n".join(f"{i+1}. {u}" for i, u in enumerate(utterances))
     system_prompt = (
-        "You judge whether an AI voice agent's spoken replies are understandable when HEARD "
-        "ALOUD by an ordinary caller. These are speech-to-text transcriptions of what the agent "
-        "said. Machine-format content read out literally is NOT understandable: a raw timestamp "
-        "(e.g. '2026 05 20 t 10' from '2026-05-20T10:00'), a long digit/ID/reference string, a "
-        "URL, or code spoken character by character. Normal sentences — even with a spelled-out "
-        "date or time a person would say naturally — are fine.\n"
-        "Count how many of the numbered utterances a listener could NOT reasonably understand, "
-        "and return those snippets verbatim as examples."
+        "You judge whether an AI voice agent's spoken replies are UNDERSTANDABLE when heard aloud "
+        "by an ordinary caller. These are speech-to-text transcriptions of what the agent said.\n"
+        "Judge each reply AS A WHOLE. A reply is understandable if a listener could follow its "
+        "meaning and act on it — even if a date, time, price, or number is phrased a little "
+        "awkwardly. For example '2026-05-20 at 10am' is understandable (the listener gets May 20, "
+        "2026 at 10am); do NOT flag it.\n"
+        "Flag a reply as unintelligible ONLY when a listener genuinely could NOT recover its "
+        "meaning, for example:\n"
+        "- garbled speech-to-text: word salad, scrambled fragments, a date mangled beyond reading "
+        "(e.g. '2026 05 20 t 10 K00')\n"
+        "- a long random identifier, code, or URL read out character by character with no "
+        "recoverable meaning\n"
+        "A clear sentence that merely contains an awkwardly-formatted but parseable date or number "
+        "is NOT unintelligible. When in doubt, treat it as understandable.\n"
+        "Return the 1-based numbers of the utterances that are genuinely unintelligible "
+        "(an empty list if every utterance is understandable)."
     )
-    user_prompt = f"## Agent utterances\n{numbered}\n\nReturn unreadable_turns (an integer) and examples (list of the offending snippets)."
+    user_prompt = f"## Agent utterances\n{numbered}\n\nReturn unreadable_indices."
     result = await llm_client.chat_with_structured_output(
         [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
         SpeechReadability,
         temperature=0.0,
     )
+    # Count only in-range, unique indices so the number is grounded in real utterances.
+    valid = sorted({i for i in result.unreadable_indices if 1 <= i <= len(utterances)})
     return {
         "agent_turns": len(utterances),
-        "unreadable_turns": max(0, min(result.unreadable_turns, len(utterances))),
-        "examples": result.examples[:5],
+        "unreadable_turns": len(valid),
+        "examples": [utterances[i - 1] for i in valid][:5],
     }
 
 

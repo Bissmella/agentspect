@@ -19,21 +19,22 @@ def _voice_transcript(*agent_lines: str) -> Transcript:
 async def test_flags_garbled_timestamp():
     llm = MagicMock()
     llm.chat_with_structured_output = AsyncMock(
-        return_value=SpeechReadability(unreadable_turns=1, examples=["2026 05 20 t 10 K00"])
+        return_value=SpeechReadability(unreadable_indices=[2])  # only the 2nd reply
     )
     out = await _evaluate_speech_readability(
         _voice_transcript("Hello, how can I help?", "Your slot is 2026 05 20 t 10 K00"), llm
     )
-    assert out == {"agent_turns": 2, "unreadable_turns": 1, "examples": ["2026 05 20 t 10 K00"]}
+    # The count maps to a specific utterance — examples are that exact turn, not free text.
+    assert out == {"agent_turns": 2, "unreadable_turns": 1, "examples": ["Your slot is 2026 05 20 t 10 K00"]}
 
 
-async def test_unreadable_count_clamped_to_turns():
+async def test_indices_deduped_and_bounded():
     llm = MagicMock()
     llm.chat_with_structured_output = AsyncMock(
-        return_value=SpeechReadability(unreadable_turns=9, examples=[])  # model over-counts
+        return_value=SpeechReadability(unreadable_indices=[1, 1, 9])  # dup + out of range
     )
     out = await _evaluate_speech_readability(_voice_transcript("only one reply"), llm)
-    assert out["agent_turns"] == 1 and out["unreadable_turns"] == 1
+    assert out["agent_turns"] == 1 and out["unreadable_turns"] == 1  # index 9 dropped, 1 deduped
 
 
 async def test_none_when_no_agent_speech():
