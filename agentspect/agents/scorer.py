@@ -67,6 +67,11 @@ class RecoveryClassification(BaseModel):
     reasoning: str
 
 
+class SpeechReadability(BaseModel):
+    unreadable_turns: int
+    examples: list[str]  # the offending snippets, verbatim as transcribed
+
+
 def _evaluate_world_state_assertion_deterministic(
     assertion: WorldStateAssertion,
     before_snapshot: dict[str, Any],
@@ -361,6 +366,47 @@ async def _evaluate_assertion(
         )
 
 
+async def _evaluate_speech_readability(
+    transcript: Transcript,
+    llm_client: LLMClient,
+) -> dict[str, Any] | None:
+    """Voice only: how many of the agent's spoken replies a listener couldn't understand.
+
+    STT confidence catches *acoustic* garble, not an acoustically-clear reply that reads
+    out machine-format content (raw ISO timestamps, IDs, URLs) a human can't parse by ear.
+    The LLM reads the agent's transcribed speech — exactly what a caller would have heard —
+    and flags the unintelligible ones. Returns ``None`` when there's nothing to judge.
+    """
+    utterances = [t.agent_response.strip() for t in transcript.turns if t.agent_response.strip()]
+    if transcript.opening_utterance and transcript.opening_utterance.strip():
+        utterances.insert(0, transcript.opening_utterance.strip())
+    if not utterances:
+        return None
+
+    numbered = "\n".join(f"{i+1}. {u}" for i, u in enumerate(utterances))
+    system_prompt = (
+        "You judge whether an AI voice agent's spoken replies are understandable when HEARD "
+        "ALOUD by an ordinary caller. These are speech-to-text transcriptions of what the agent "
+        "said. Machine-format content read out literally is NOT understandable: a raw timestamp "
+        "(e.g. '2026 05 20 t 10' from '2026-05-20T10:00'), a long digit/ID/reference string, a "
+        "URL, or code spoken character by character. Normal sentences — even with a spelled-out "
+        "date or time a person would say naturally — are fine.\n"
+        "Count how many of the numbered utterances a listener could NOT reasonably understand, "
+        "and return those snippets verbatim as examples."
+    )
+    user_prompt = f"## Agent utterances\n{numbered}\n\nReturn unreadable_turns (an integer) and examples (list of the offending snippets)."
+    result = await llm_client.chat_with_structured_output(
+        [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+        SpeechReadability,
+        temperature=0.0,
+    )
+    return {
+        "agent_turns": len(utterances),
+        "unreadable_turns": max(0, min(result.unreadable_turns, len(utterances))),
+        "examples": result.examples[:5],
+    }
+
+
 async def _classify_recovery_quality(
     transcript: Transcript,
     llm_client: LLMClient,
@@ -578,6 +624,14 @@ async def scorer_node(
             except Exception:
                 recovery_quality = None
 
+        # Voice only: did the agent say anything a caller couldn't understand by ear?
+        speech_readability = None
+        if any(t.voice is not None for t in transcript.turns):
+            try:
+                speech_readability = await _evaluate_speech_readability(transcript, llm_client)
+            except Exception:
+                speech_readability = None
+
         if agent_failure is not None:
             reason = f"Run failed — agent {agent_failure.value} (did not complete the conversation)"
         else:
@@ -595,6 +649,7 @@ async def scorer_node(
             assertion_results=assertion_results,
             recovery_quality=recovery_quality,
             data_collection=data_collection_results,
+            speech_readability=speech_readability,
         )
 
     return {

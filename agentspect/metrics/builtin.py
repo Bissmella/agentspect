@@ -457,3 +457,41 @@ class DataCollectionMetric(Metric):
             accuracy=correct / n if n else None,
             avg_cer=sum(cers) / len(cers) if cers else None,
         )
+
+
+class SpeechReadabilityResult(BaseModel):
+    turns_checked: int
+    unreadable_turns: int
+    readable_rate: float | None  # None = no voice turns judged (not applicable)
+    examples: list[str]
+
+
+@register
+class SpeechReadabilityMetric(Metric):
+    """Share of the agent's spoken replies a listener could actually understand.
+
+    Aggregates the per-scenario ``speech_readability`` judgment (voice only) the scorer
+    produces with an LLM. Catches acoustically-clear replies that read out machine-format
+    content — raw timestamps, IDs, URLs — which STT confidence scores as perfectly clear.
+    ``readable_rate`` is ``None`` when no voice turns were judged, not 0.0.
+    """
+
+    name = "speech_readability"
+    description = "Fraction of the agent's spoken replies understandable by ear (LLM-judged)."
+
+    def compute(self, ctx: MetricContext) -> SpeechReadabilityResult:
+        checked = unreadable = 0
+        examples: list[str] = []
+        for v in ctx.verdicts.values():
+            r = v.speech_readability
+            if not r:
+                continue
+            checked += r.get("agent_turns", 0)
+            unreadable += r.get("unreadable_turns", 0)
+            examples.extend(r.get("examples", []))
+        return SpeechReadabilityResult(
+            turns_checked=checked,
+            unreadable_turns=unreadable,
+            readable_rate=(checked - unreadable) / checked if checked else None,
+            examples=examples[:5],
+        )

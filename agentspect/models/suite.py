@@ -150,3 +150,6 @@ class ScenarioVerdict(BaseModel):
     assertion_results: list[dict[str, Any]] = Field(default_factory=list)
     recovery_quality: str | None = None
     data_collection: list[dict[str, Any]] = Field(default_factory=list)
+    # Voice only: LLM judgment of whether the agent's spoken replies are understandable
+    # when heard aloud. {agent_turns, unreadable_turns, examples}. None = not a voice run.
+    speech_readability: dict[str, Any] | None = None
