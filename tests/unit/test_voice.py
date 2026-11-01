@@ -370,6 +370,24 @@ def test_latency_metric_uses_ttfa_not_whole_turn_for_voice():
     assert m.compute(ctx).avg_ms == 400  # responsiveness, not the 8000ms whole turn
 
 
+def test_latency_metric_skips_no_response_turn():
+    from agentspect.metrics.base import MetricContext
+    from agentspect.metrics.builtin import LatencyMetric
+
+    transcript = Transcript(scenario_id="s1", session_id="x", protocol="voicewebsocket")
+    # A disconnected turn carries a whole-turn latency_ms but no real response — must not count.
+    transcript.add_turn(Turn(user_message="a", agent_response="", latency_ms=4148,
+                             agent_failure=AgentFailure.DISCONNECTED))
+    transcript.add_turn(Turn(user_message="c", agent_response="d", latency_ms=200,
+                             voice=VoiceMeta(time_to_first_audio_ms=300)))
+    scenario = _mk_scenario("s1")
+    ctx = MetricContext(scenarios=[scenario], transcripts={"s1": transcript})
+    m = LatencyMetric()
+    for i, turn in enumerate(transcript.turns):
+        m.on_turn(ctx, scenario, turn, i)
+    assert m.compute(ctx).avg_ms == 300  # only the responding turn's ttfa, not the 4148ms drop
+
+
 def test_time_to_first_audio_metric():
     from agentspect.metrics.base import MetricContext
 

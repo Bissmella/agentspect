@@ -105,14 +105,14 @@ class LatencyResult(BaseModel):
 @register
 class LatencyMetric(Metric):
     name = "latency"
-    description = "Agent response latency across all non-error turns (ms)."
+    description = "Agent response latency (ttfa for voice, round-trip for text) across turns with a response (ms)."
 
     def __init__(self) -> None:
         self._samples: list[int] = []
 
     def on_turn(self, ctx: MetricContext, scenario: Scenario, turn: Turn, index: int) -> None:
-        if turn.error is not None:
-            return
+        if turn.error is not None or turn.agent_failure is not None:
+            return  # no response happened (error/disconnect/no-response) → not a latency sample
         if turn.voice is not None:
             if turn.voice.time_to_first_audio_ms is not None:
                 self._samples.append(turn.voice.time_to_first_audio_ms)
