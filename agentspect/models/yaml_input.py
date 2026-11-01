@@ -25,6 +25,22 @@ class WorldStateInput(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class EntitySpec(BaseModel):
+    """A request to generate entities into world_state from context. materialized
+    before generation and appended to world_state.entties. This does not replace concrete
+    world_state.
+
+    ``count`` is honored when set, else derived from test_config. ``kind`` of
+    ``person`` turns on persona enrichment. ``traits`` is a free-text realism hint
+    read together with world_state.context (language, country).
+    """
+
+    kind: str = "person"
+    count: int | None = Field(default=None, ge=1)
+    attributes: list[str] = Field(default_factory=list)
+    traits: str | None = None
+
+
 class TestConfig(BaseModel):
     total: int = Field(ge=1)
     positive: int = Field(ge=0)
@@ -93,6 +109,7 @@ class YAMLInput(BaseModel):
     world_state: WorldStateInput
     test_config: TestConfig
     llm_config: LLMConfig
+    entity_specs: list[EntitySpec] = Field(default_factory=list)
     assets: list[AssetSpec] = Field(default_factory=list)
     voice: VoiceConfig | None = None
 

@@ -18,6 +18,27 @@ def test_invalid_yaml_syntax():
         parse_and_validate(invalid_yaml)
 
 
+def test_entity_specs_parse(valid_yaml):
+    with_specs = valid_yaml + """
+entity_specs:
+  - kind: person
+    count: 3
+    attributes: [full_name, phone]
+    traits: "verified callers in France"
+"""
+    result, _ = parse_and_validate(with_specs)
+    assert len(result.entity_specs) == 1
+    spec = result.entity_specs[0]
+    assert spec.kind == "person"
+    assert spec.count == 3
+    assert spec.attributes == ["full_name", "phone"]
+
+
+def test_entity_specs_default_empty(valid_yaml):
+    result, _ = parse_and_validate(valid_yaml)
+    assert result.entity_specs == []
+
+
 _CALLABLE_YAML = """
 agent_under_test:
   name: "In-process Agent"

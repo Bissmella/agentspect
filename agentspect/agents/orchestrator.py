@@ -6,6 +6,7 @@ from agentspect.adapters.base import ProtocolAdapter
 from agentspect.adapters.callable_adapter import AgentCallable, CallableAdapter
 from agentspect.adapters.ws_adapter import create_adapter
 from agentspect.agents.asset_ingestion import asset_ingestion_node
+from agentspect.agents.entity_populator import entity_populator_node
 from agentspect.agents.reporter import reporter_node
 from agentspect.agents.scenario_generator import scenario_generator_node
 from agentspect.agents.scorer import scorer_node
@@ -35,6 +36,7 @@ def _initialize_state(
         world_state_input=yaml_input.world_state,
         test_config=yaml_input.test_config,
         llm_config=yaml_input.llm_config,
+        entity_specs=yaml_input.entity_specs,
         assets=assets or [],
         world_state=world_state,
         scenarios=[],
@@ -57,6 +59,13 @@ def _initialize_state(
 def _create_asset_ingestion_node(llm_client: LLMClient):
     async def node(state: ATAGraphState) -> dict[str, Any]:
         return await asset_ingestion_node(state, llm_client)
+
+    return node
+
+
+def _create_entity_populator_node(llm_client: LLMClient):
+    async def node(state: ATAGraphState) -> dict[str, Any]:
+        return await entity_populator_node(state, llm_client)
 
     return node
 
@@ -164,6 +173,7 @@ def build_graph(
     graph = StateGraph(ATAGraphState)
 
     graph.add_node("asset_ingestion", _create_asset_ingestion_node(llm_client))
+    graph.add_node("populate_entities", _create_entity_populator_node(llm_client))
     graph.add_node("generate_scenarios", _create_scenario_generator_node(llm_client))
     graph.add_node("prepare_batch", _prepare_batch_node)
     graph.add_node("user_simulator", _create_user_simulator_node(llm_client, adapter))
@@ -173,7 +183,9 @@ def build_graph(
     graph.add_node("reporter", _create_reporter_node(llm_client))
 
     graph.set_entry_point("asset_ingestion")
-    graph.add_edge("asset_ingestion", "generate_scenarios")
+    # Both pre-generation nodes no-op when their input is absent, so the chain is linear.
+    graph.add_edge("asset_ingestion", "populate_entities")
+    graph.add_edge("populate_entities", "generate_scenarios")
 
     graph.add_conditional_edges(
         "generate_scenarios",
@@ -208,9 +220,11 @@ def build_generate_graph(llm_client: LLMClient) -> StateGraph:
     """Generation only: ingest assets, generate scenarios, stop (for a review gate)."""
     graph = StateGraph(ATAGraphState)
     graph.add_node("asset_ingestion", _create_asset_ingestion_node(llm_client))
+    graph.add_node("populate_entities", _create_entity_populator_node(llm_client))
     graph.add_node("generate_scenarios", _create_scenario_generator_node(llm_client))
     graph.set_entry_point("asset_ingestion")
-    graph.add_edge("asset_ingestion", "generate_scenarios")
+    graph.add_edge("asset_ingestion", "populate_entities")
+    graph.add_edge("populate_entities", "generate_scenarios")
     graph.add_edge("generate_scenarios", END)
     return graph
 
@@ -257,6 +271,7 @@ class OrchestratorAgent:
         self._graph = None
         self._llm_client: LLMClient | None = None
         self._adapter: ProtocolAdapter | None = None
+        self.materialized_world_state: dict[str, Any] | None = None
 
     def _emit_progress(self, event: str, data: dict[str, Any] | None = None) -> None:
         if self.progress_callback:
@@ -419,23 +434,37 @@ class OrchestratorAgent:
             raise RuntimeError(f"Scenario generation failed: {error_msg}")
 
         scenarios = merged["scenarios"]
+        # Expose the augmented world for the host to persist and re-inject at execute(),
+        # so the reviewed world is the world that runs (entity_populator ran here, not there).
+        ws = merged.get("world_state")
+        self.materialized_world_state = ws.to_dict() if ws is not None else None
         self.generation_warning = merged.get("warning")
         if self.generation_warning:
             self._emit_progress("generation_warning", {"warning": self.generation_warning})
         self._emit_progress("scenarios_generated", {"count": len(scenarios)})
         return [s.model_dump(mode="json") for s in scenarios]
 
-    async def execute(self, scenarios: list[dict[str, Any]]) -> dict[str, Any]:
-        """Execute a reviewed/edited scenario set (skips generation) through the report."""
+    async def execute(
+        self,
+        scenarios: list[dict[str, Any]],
+        world_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute a reviewed/edited scenario set (skips generation) through the report.
+
+        ``world_state`` is the materialized world returned by ``generate()``.
+        """
         initial_state = await self.initialize()
+
+        if world_state is not None:
+            initial_state["world_state"] = WorldState.from_dict(world_state)
 
         try:
             scen_objs = [Scenario.model_validate(s) for s in scenarios]
         except Exception as e:
             raise RuntimeError(f"Invalid scenario in the reviewed set: {e}") from e
 
-        # The user may have edited turns; re-check placeholders resolve in world_state.
-        world_state_data = initial_state["world_state_input"].model_dump()
+        # The user may have edited turns; re-check placeholders against the world that runs.
+        world_state_data = initial_state["world_state"].data
         for sc in scen_objs:
             for turn in sc.turns:
                 errors = validate_placeholders(turn, world_state_data)

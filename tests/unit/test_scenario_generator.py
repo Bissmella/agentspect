@@ -10,11 +10,20 @@ from agentspect.agents.scenario_generator import (
 )
 from agentspect.agents.state import ATAGraphState
 from agentspect.models.suite import ScenarioType
+from agentspect.models.world_state import WorldState
 from agentspect.models.yaml_input import AgentUnderTest, LLMConfig, TestConfig, WorldStateInput
 
 
 @pytest.fixture
 def sample_state() -> ATAGraphState:
+    ws_input = WorldStateInput(
+        entities=[
+            {"id": "user_1", "phone": "+1234567890", "name": "John"},
+        ],
+        catalog={"slots": ["2026-05-20T10:00", "2026-05-20T14:00"]},
+        constraints=["only verified users can book"],
+        context={"language": "en"},
+    )
     return ATAGraphState(
         agent_under_test=AgentUnderTest(
             name="Test Agent",
@@ -24,14 +33,8 @@ def sample_state() -> ATAGraphState:
             capabilities=["booking", "lookup"],
             known_limitations=["no rescheduling"],
         ),
-        world_state_input=WorldStateInput(
-            entities=[
-                {"id": "user_1", "phone": "+1234567890", "name": "John"},
-            ],
-            catalog={"slots": ["2026-05-20T10:00", "2026-05-20T14:00"]},
-            constraints=["only verified users can book"],
-            context={"language": "en"},
-        ),
+        world_state_input=ws_input,
+        world_state=WorldState.from_dict(ws_input.model_dump()),
         test_config=TestConfig(total=2, positive=1, negative=1),
         llm_config=LLMConfig(provider="anthropic", model="claude-sonnet-4-20250514"),
     )

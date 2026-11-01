@@ -89,14 +89,16 @@ def _convert_scenario(gen_scenario: GeneratedScenario) -> Scenario:
 
 def _build_system_prompt(state: ATAGraphState) -> str:
     agent = state["agent_under_test"]
-    world_state = state["world_state_input"]
+    # Read the live world, not the frozen input: asset_ingestion and entity_populator
+    # augment world_state before this node, and those entities must be visible here.
+    ws = state["world_state"].data
     test_config = state["test_config"]
 
     import json
-    entities_json = json.dumps(world_state.entities, indent=2)
-    catalog_json = json.dumps(world_state.catalog, indent=2)
-    constraints_json = json.dumps(world_state.constraints, indent=2)
-    context_json = json.dumps(world_state.context, indent=2)
+    entities_json = json.dumps(ws.get("entities", []), indent=2)
+    catalog_json = json.dumps(ws.get("catalog", {}), indent=2)
+    constraints_json = json.dumps(ws.get("constraints", []), indent=2)
+    context_json = json.dumps(ws.get("context", {}), indent=2)
 
     return f"""You are a test scenario generator for an AI agent testing framework.
 
@@ -276,7 +278,7 @@ async def scenario_generator_node(
             scenarios.extend(s for s in kb_scenarios if s.id not in seen_ids)
 
         # Placeholder validity is a correctness gate, not a count one — still hard-fail.
-        world_state_data = state["world_state_input"].model_dump()
+        world_state_data = state["world_state"].data
         for scenario in scenarios:
             for turn in scenario.turns:
                 errors = validate_placeholders(turn, world_state_data)

@@ -4,7 +4,7 @@ from agentspect.assets.base import Asset
 from agentspect.models.suite import Scenario, ScenarioVerdict
 from agentspect.models.transcript import Transcript
 from agentspect.models.world_state import WorldState
-from agentspect.models.yaml_input import AgentUnderTest, LLMConfig, TestConfig, WorldStateInput
+from agentspect.models.yaml_input import AgentUnderTest, EntitySpec, LLMConfig, TestConfig, WorldStateInput
 
 
 class ATAGraphState(TypedDict, total=False):
@@ -13,6 +13,7 @@ class ATAGraphState(TypedDict, total=False):
     test_config: TestConfig
     llm_config: LLMConfig
 
+    entity_specs: list[EntitySpec]
     assets: list[Asset]
 
     world_state: WorldState
