@@ -180,17 +180,38 @@ IMPORTANT: Probes are ADDITIONAL scenarios that verify state changes. They do NO
    turns must actually ATTEMPT the invalid thing (ask for the out-of-catalog slot, use the
    unknown phone, cross the stated constraint) — never substitute a valid value.
 7. Every scenario MUST have at least one assertion — a scenario with none cannot be evaluated.
+8. POSITIVE scenarios must include enough turns to COMPLETE the action. If the agent asks a
+   follow-up before finishing (which option, confirm the time, provide a name), the next turn
+   answers it. Do not end before the agent has actually performed and confirmed the action —
+   a half-finished task fails a correct agent.
 
 ## Assertion Writing Rules
 
+Assert ONLY outcomes the agent's description, capabilities, and the world_state/constraints
+actually promise. Never invent requirements the spec does not state — confirmation or
+reference numbers, emails, receipts, extra fields. Asserting a behavior the agent was never
+asked to perform fails a correct agent and tests nothing real.
+
 ### world_state assertions (for stateful scenarios)
-- path: JSON pointer to the value (e.g., "/catalog/slots/2026-05-20T10:00")
-- operator: "removed" (value was deleted), "added" (value was created), "equals" (value matches expected), "contains", "not_contains"
-- expected_value: the expected value (required for equals/contains/not_contains)
-- Example: After booking slot X, use operator "removed" with path "/catalog/slots/X" OR operator "equals" with expected_value "booked"
+- path: a JSON pointer from the ROOT of world_state to the specific value that changes.
+  ALWAYS include the top-level bucket it lives under — "/catalog/…", "/entities/…" — and use
+  keys exactly as they appear in the JSON above (e.g. a slot list at
+  "/catalog/available_slots", an entity field at "/entities/0/verified"). A bare
+  "/available_slots" that omits the bucket will not resolve and fails a correct agent.
+- operator: "removed" (a whole path/key was deleted), "added" (a whole path/key was created),
+  "equals" (value matches expected), "contains", "not_contains"
+- expected_value: required for equals/contains/not_contains
+- Removing ONE item from a collection (a list of slots, a set of options): assert the
+  collection no longer contains that one item — operator "not_contains", path = the
+  collection, expected_value = the exact item. Do NOT assert the whole collection was
+  "removed" or "equals" a smaller/empty list: acting on one item leaves the rest, so a
+  whole-collection assertion fails a correct agent.
+- Use "removed"/"added" only when an entire key genuinely appears or disappears, never for a
+  single element changing inside a list.
 
 ### transcript assertions (for conversation checks)
-- check: natural language condition (e.g., "agent confirmed the booking with a confirmation number")
+- check: natural language condition, limited to what the spec promises (e.g., "agent
+  confirmed the booking"). Do not require wording or artifacts the spec never mentions.
 - speaker: "agent" or "user"
 
 ### behavioral assertions (for behavior classification)
