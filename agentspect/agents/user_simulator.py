@@ -18,8 +18,25 @@ _NUDGE_LINES = [
 ]
 
 
-def _agent_still_soliciting(text: str) -> bool:
-    return "?" in (text or "")
+async def _should_continue(scenario, world_state, history, llm_client) -> bool:
+    # Should the caller keep talking? Ask the persona model, not a text heuristic: "?"
+    try:
+        resp = await llm_client.chat(
+            [
+                {"role": "system", "content": _build_persona_prompt(scenario, world_state)},
+                *history,
+                {"role": "user", "content": (
+                    "Reply with exactly one word. CONTINUE if you still need to say something "
+                    "to reach your goal — the agent asked you something, or has not yet carried "
+                    "out or refused your request. DONE if the agent has completed your request "
+                    "or clearly refused it."
+                )},
+            ],
+            temperature=0,
+        )
+        return "CONTINUE" in (resp.content or "").upper()
+    except Exception:
+        return False
 
 
 def _build_persona_prompt(scenario: Scenario, world_state: WorldState) -> str:
@@ -223,9 +240,11 @@ Return ONLY the message you want to send. No explanations or quotes.""",
             conversation_history.append({"role": "user", "content": user_message})
             conversation_history.append({"role": "assistant", "content": turn.agent_response})
 
-            # Pursue the goal past the script: if the agent is still soliciting on the final
-            # planned turn and we're under the cap, append one more goal-driven turn.
-            if is_last_turn and (i + 1) < max_turns and _agent_still_soliciting(turn.agent_response):
+            # Pursue the goal past the script: while under the cap and the caller still has
+            # something to say to reach the goal, append one more goal-driven turn.
+            if is_last_turn and (i + 1) < max_turns and await _should_continue(
+                scenario, world_state, conversation_history, llm_client
+            ):
                 turns_plan.append(None)
             i += 1
 
