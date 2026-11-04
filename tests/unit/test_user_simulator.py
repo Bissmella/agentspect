@@ -302,3 +302,62 @@ async def test_user_simulator_agent_class(
     result = await agent(state)
 
     assert result["status"] == "batch_executed"
+
+
+@pytest.mark.asyncio
+async def test_user_simulator_pursues_goal_until_agent_stops_asking(
+    sample_world_state, mock_llm_client
+):
+    from agentspect.models.transcript import Transcript
+
+    # Agent asks a question on the one scripted turn, then confirms (no "?"): the simulator
+    # keeps going one more turn to finish the booking instead of stopping mid-flow.
+    responses = iter([
+        Turn(user_message="x", agent_response="Which slot would you like?",
+             timestamp=datetime.now(UTC), latency_ms=10),
+        Turn(user_message="x", agent_response="Booked. See you then.",
+             timestamp=datetime.now(UTC), latency_ms=10),
+    ])
+    adapter = MagicMock()
+    adapter.start_session = AsyncMock(return_value="s1")
+    adapter.end_session = AsyncMock()
+    adapter.send_turn = AsyncMock(side_effect=lambda *a, **k: next(responses))
+    adapter.create_transcript = MagicMock(return_value=Transcript(
+        scenario_id="book", session_id="s1", protocol="http", turns=[]))
+    scenario = Scenario(id="book", type=ScenarioType.POSITIVE, description="book",
+                        turns=["Book me the 10am slot"], persona="user_1")
+
+    state = ATAGraphState(
+        current_batch_scenarios=[scenario], world_state=sample_world_state,
+        transcripts={}, verdicts={}, skipped_scenarios=set(),
+    )
+    await user_simulator_node(state, mock_llm_client, adapter)
+
+    assert adapter.send_turn.call_count == 2  # scripted turn + one goal-pursuit continuation
+
+
+@pytest.mark.asyncio
+async def test_user_simulator_goal_pursuit_is_capped(
+    sample_world_state, mock_llm_client
+):
+    from agentspect.models.transcript import Transcript
+
+    # An agent that never stops asking must not loop forever: bounded by max(len+3, 6).
+    adapter = MagicMock()
+    adapter.start_session = AsyncMock(return_value="s1")
+    adapter.end_session = AsyncMock()
+    adapter.send_turn = AsyncMock(return_value=Turn(
+        user_message="x", agent_response="And what else would you like?",
+        timestamp=datetime.now(UTC), latency_ms=10))
+    adapter.create_transcript = MagicMock(return_value=Transcript(
+        scenario_id="loop", session_id="s1", protocol="http", turns=[]))
+    scenario = Scenario(id="loop", type=ScenarioType.POSITIVE, description="book",
+                        turns=["Hi"], persona="user_1")
+
+    state = ATAGraphState(
+        current_batch_scenarios=[scenario], world_state=sample_world_state,
+        transcripts={}, verdicts={}, skipped_scenarios=set(),
+    )
+    await user_simulator_node(state, mock_llm_client, adapter)
+
+    assert adapter.send_turn.call_count == 6  # 1 scripted + 5 continuations, then cap stops it

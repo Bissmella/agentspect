@@ -18,6 +18,10 @@ _NUDGE_LINES = [
 ]
 
 
+def _agent_still_soliciting(text: str) -> bool:
+    return "?" in (text or "")
+
+
 def _build_persona_prompt(scenario: Scenario, world_state: WorldState) -> str:
     import json
 
@@ -110,11 +114,17 @@ async def _run_single_scenario(
     world_state_data = world_state.to_dict()
     verdict = None
     conversation_history: list[dict[str, str]] = []
+    # Scripted turns are a plan, not a hard cap
+    turns_plan: list[str | None] = list(scenario.turns)
+    max_turns = max(len(turns_plan) + 3, 6) 
 
     try:
-        for i, turn_template in enumerate(scenario.turns):
+        i = 0
+        while i < len(turns_plan):
+            turn_template = turns_plan[i]
+            continuation = turn_template is None  # appended goal-pursuit turn: no scripted text
             try:
-                user_message = resolve_placeholders(turn_template, world_state_data)
+                user_message = "" if continuation else resolve_placeholders(turn_template, world_state_data)
             except PlaceholderResolutionError as e:
                 verdict = ScenarioVerdict(
                     scenario_id=scenario.id,
@@ -131,6 +141,12 @@ async def _run_single_scenario(
             if i > 0 and conversation_history:
                 system_prompt = _build_persona_prompt(scenario, world_state)
                 last_agent_response = conversation_history[-1]['content'] if conversation_history else ''
+                planned = (
+                    "Continue the conversation naturally toward your goal based on what the "
+                    "agent just said (answer its question or confirm, using your persona data)."
+                    if continuation
+                    else f'Your next planned message was: "{user_message}"'
+                )
                 adapt_messages = [
                     {"role": "system", "content": system_prompt},
                     *conversation_history,
@@ -138,7 +154,7 @@ async def _run_single_scenario(
                         "role": "user",
                         "content": f"""The agent just responded: "{last_agent_response}"
 
-Your next planned message was: "{user_message}"
+{planned}
 
 Adapt your response naturally based on what the agent said.
 - If the agent asked a question, answer it using your EXACT persona details
@@ -158,7 +174,7 @@ Return ONLY the message you want to send. No explanations or quotes.""",
                     user_message = response.content.strip() or user_message
                     message = user_message
 
-            is_last_turn = i == len(scenario.turns) - 1
+            is_last_turn = i == len(turns_plan) - 1
 
             # Send the turn; on a voice call, nudge a silent agent like a human would
             # before giving up — only after the nudges go unanswered is it a failure.
@@ -206,6 +222,12 @@ Return ONLY the message you want to send. No explanations or quotes.""",
 
             conversation_history.append({"role": "user", "content": user_message})
             conversation_history.append({"role": "assistant", "content": turn.agent_response})
+
+            # Pursue the goal past the script: if the agent is still soliciting on the final
+            # planned turn and we're under the cap, append one more goal-driven turn.
+            if is_last_turn and (i + 1) < max_turns and _agent_still_soliciting(turn.agent_response):
+                turns_plan.append(None)
+            i += 1
 
     finally:
         await adapter.end_session(session_id)
