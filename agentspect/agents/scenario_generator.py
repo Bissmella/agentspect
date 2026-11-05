@@ -171,19 +171,24 @@ IMPORTANT: Probes are ADDITIONAL scenarios that verify state changes. They do NO
 ## Turn Writing Rules
 1. Each turn is a single user message (string)
 2. Write realistic conversational messages, not commands
-3. Include the persona's actual data in the message:
-   - GOOD: "Hi, my phone number is +1111111111"
-   - BAD: "Hi, my phone number is 123-456-7890" (made up)
+3. When the agent needs the persona's data, use the persona's ACTUAL values from world_state,
+   never invented ones.
 4. Keep turns concise - 1-3 sentences each
-5. Typical flow: greeting → provide identity → state request → confirm details
-6. The turns MUST carry out the action named in the description. A negative scenario's
+5. Say values the way a real person says them aloud, not as the raw code the system stores
+   them as (render dates, times, identifiers and the like in natural language). The stored
+   form belongs to the agent, not to what the user says.
+6. Each turn must move the goal forward. Do NOT add a turn whose only job is to re-confirm,
+   repeat, or re-request something the agent already did or stated — the agent confirms its
+   own actions. One goal per scenario.
+7. The turns MUST carry out the action named in the description. A negative scenario's
    turns must actually ATTEMPT the invalid thing (ask for the out-of-catalog slot, use the
    unknown phone, cross the stated constraint) — never substitute a valid value.
-7. Every scenario MUST have at least one assertion — a scenario with none cannot be evaluated.
-8. POSITIVE scenarios must include enough turns to COMPLETE the action. If the agent asks a
+8. Every scenario MUST have at least one assertion — a scenario with none cannot be evaluated.
+9. POSITIVE scenarios must include enough turns to COMPLETE the action. If the agent asks a
    follow-up before finishing (which option, confirm the time, provide a name), the next turn
-   answers it. Do not end before the agent has actually performed and confirmed the action —
-   a half-finished task fails a correct agent.
+   answers it. But once the agent has performed and confirmed the action, the scenario is
+   done — stop there. A half-finished task fails a correct agent; an extra re-confirm turn
+   re-opens a finished one.
 
 ## Assertion Writing Rules
 

@@ -26,10 +26,12 @@ async def _should_continue(scenario, world_state, history, llm_client) -> bool:
                 {"role": "system", "content": _build_persona_prompt(scenario, world_state)},
                 *history,
                 {"role": "user", "content": (
-                    "Reply with exactly one word. CONTINUE if you still need to say something "
-                    "to reach your goal — the agent asked you something, or has not yet carried "
-                    "out or refused your request. DONE if the agent has completed your request "
-                    "or clearly refused it."
+                    "Reply with exactly one word. DONE if the agent has — at any point in this "
+                    "conversation — already carried out your original request or clearly refused "
+                    "it; say DONE even if it is now offering an alternative or asking a follow-up. "
+                    "CONTINUE only if your original request has not yet been carried out or refused "
+                    "and you still need to respond to accomplish it. Do not start a new request or "
+                    "go beyond your original goal just to keep the conversation going."
                 )},
             ],
             temperature=0,
@@ -159,8 +161,10 @@ async def _run_single_scenario(
                 system_prompt = _build_persona_prompt(scenario, world_state)
                 last_agent_response = conversation_history[-1]['content'] if conversation_history else ''
                 planned = (
-                    "Continue the conversation naturally toward your goal based on what the "
-                    "agent just said (answer its question or confirm, using your persona data)."
+                    "Continue the conversation naturally toward your original goal based on what "
+                    "the agent just said (answer its question or confirm, using your persona data). "
+                    "If your original goal is already met or refused, briefly thank the agent and "
+                    "end the conversation — do not start a new request or go beyond your original goal."
                     if continuation
                     else f'Your next planned message was: "{user_message}"'
                 )
